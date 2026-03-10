@@ -1,0 +1,69 @@
+name: maintenance
+
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+
+    container:
+      image: mcr.microsoft.com/playwright:v1.58.1-jammy
+
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        category:
+          - GPU
+          - CPU
+          - RAM
+          - Storage
+          - Motherboard
+          - PSU
+          - Case
+          - Cooler
+          - Monitor
+          - Laptop
+          - Headphones
+          - Keyboards
+          - Mice
+          - Speakers
+          - Webcams
+          - CaseFans
+          - FanControllers
+          - ThermalCompound
+          - MonitorSupport
+          - Manettes
+          - UPS
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.PRIVATE_REPO }}
+          token: ${{ secrets.MY_PAT }}
+          path: project
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+
+      - name: Install dependencies
+        working-directory: project
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright
+        working-directory: project
+        run: pnpm exec playwright install chromium --with-deps
+
+      - name: Execute task
+        working-directory: project
+        env:
+          ENABLE_SCRAPING: "true"
+          CATEGORY: ${{ matrix.category }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: pnpm -s scrape:update-prices
