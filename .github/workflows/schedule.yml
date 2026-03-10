@@ -40,7 +40,7 @@ jobs:
           - UPS
 
     steps:
-      - name: Checkout code
+      - name: Checkout private repository
         uses: actions/checkout@v4
         with:
           repository: ${{ secrets.PRIVATE_REPO }}
@@ -52,15 +52,22 @@ jobs:
         with:
           version: 10.28.2
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "pnpm"
+          cache-dependency-path: project/pnpm-lock.yaml
+
       - name: Install dependencies
         working-directory: project
         run: pnpm install --frozen-lockfile
 
-      - name: Install Playwright
+      - name: Install Playwright browsers
         working-directory: project
         run: pnpm exec playwright install chromium --with-deps
 
-      - name: Execute task
+      - name: Run price update
         working-directory: project
         env:
           ENABLE_SCRAPING: "true"
