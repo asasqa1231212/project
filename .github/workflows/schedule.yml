@@ -104,39 +104,59 @@ jobs:
       - name: Send Discord notification - Success
         if: needs.run.result == 'success'
         run: |
+          PAYLOAD=$(cat << 'EOF'
+          {
+            "embeds": [{
+              "title": "✅ Price Update Completed",
+              "description": "All categories have been updated!",
+              "color": 65280,
+              "footer": {"text": "Bot"},
+              "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            }]
+          }
+          EOF
+          )
           curl -X POST \
             -H "Content-Type: application/json" \
-            -d '{
-              "content": null,
-              "embeds": [{
-                "title": "✅ Price Update Completed",
-                "description": "All categories have been updated!",
-                "color": 65280,
-                "fields": [
-                  {"name": "Categories", "value": "${{ needs.get-categories.outputs.categories }}", "inline": false}
-                ],
-                "footer": {"text": "Bot"},
-                "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"
-              }]
-            }' \
+            -d "$PAYLOAD" \
             ${{ secrets.WEBHOOK }}
 
       - name: Send Discord notification - Failure
         if: needs.run.result == 'failure'
         run: |
+          PAYLOAD=$(cat << 'EOF'
+          {
+            "embeds": [{
+              "title": "❌ Price Update Failed",
+              "description": "One or more categories failed!",
+              "color": 16711680,
+              "footer": {"text": "Bot"},
+              "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            }]
+          }
+          EOF
+          )
           curl -X POST \
             -H "Content-Type: application/json" \
-            -d '{
-              "content": null,
-              "embeds": [{
-                "title": "❌ Price Update Failed",
-                "description": "One or more categories failed!",
-                "color": 16711680,
-                "fields": [
-                  {"name": "Categories", "value": "${{ needs.get-categories.outputs.categories }}", "inline": false}
-                ],
-                "footer": {"text": "Bot"},
-                "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"
-              }]
-            }' \
+            -d "$PAYLOAD" \
+            ${{ secrets.WEBHOOK }}
+
+      - name: Send Discord notification - Cancelled
+        if: needs.run.result == 'cancelled'
+        run: |
+          PAYLOAD=$(cat << 'EOF'
+          {
+            "embeds": [{
+              "title": "⚠️ Price Update Cancelled",
+              "description": "The workflow was cancelled!",
+              "color": 16776960,
+              "footer": {"text": "Bot"},
+              "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            }]
+          }
+          EOF
+          )
+          curl -X POST \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
             ${{ secrets.WEBHOOK }}
