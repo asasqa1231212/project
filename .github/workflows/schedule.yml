@@ -52,8 +52,7 @@ jobs:
       max-parallel: 4
       matrix:
         category: ${{ fromJson(needs.get-categories.outputs.categories) }}
-    output:
-      results: ${{ steps.capture-results.outputs.results }}
+
     container:
       image: mcr.microsoft.com/playwright:v1.58.1-jammy
 
@@ -88,26 +87,13 @@ jobs:
         run: pnpm exec playwright install chromium --with-deps
 
       - name: Run price update
-        id: scrape
         working-directory: project
         env:
           ENABLE_SCRAPING: "true"
           CATEGORY: ${{ matrix.category }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           NODE_ENV: production
-        run: |
-          OUTPUT=$(pnpm -s scrape:update-prices 2>&1)
-          echo "$OUTPUT"
-          # Extract stats from output
-          UPDATED=$(echo "$OUTPUT" | grep -oP '\d+(?= updated)' | head -1 || echo "0")
-          FAILED=$(echo "$OUTPUT" | grep -oP '\d+(?= failed)' | head -1 || echo "0")
-          PRICE_CHANGES=$(echo "$OUTPUT" | grep -oP '\d+(?= price changes)' | head -1 || echo "0")
-          echo "results={\"category\":\"${{ matrix.category }}\",\"updated\":\"$UPDATED\",\"failed\":\"$FAILED\",\"priceChanges\":\"$PRICE_CHANGES\"}" >> $GITHUB_OUTPUT
-
-      - name: Capture results
-        id: capture-results
-        run: |
-          echo "results=${{ steps.scrape.outputs.results }}" >> $GITHUB_OUTPUT
+        run: pnpm -s scrape:update-prices
 
   # Notify on workflow completion
   notify:
@@ -115,18 +101,6 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Format results for Discord
-        id: format
-        run: |
-          # Collect all results
-          RESULTS=""
-          for result in ${{ needs.run.outputs.results }}; do
-            RESULTS="$RESULTS$result,"
-          done
-          # Remove trailing comma
-          RESULTS="${RESULTS%,}"
-          echo "formatted=$RESULTS" >> $GITHUB_OUTPUT
-
       - name: Send Discord notification - Success
         if: needs.run.result == 'success'
         run: |
@@ -139,7 +113,7 @@ jobs:
                 "description": "All categories have been updated!",
                 "color": 65280,
                 "fields": [
-                  {"name": "Categories Updated", "value": "${{ needs.get-categories.outputs.categories }}", "inline": false}
+                  {"name": "Categories", "value": "${{ needs.get-categories.outputs.categories }}", "inline": false}
                 ],
                 "footer": {"text": "Bot"},
                 "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"
@@ -156,10 +130,9 @@ jobs:
               "content": null,
               "embeds": [{
                 "title": "❌ Price Update Failed",
-                "description": "One or more categories failed to update!",
+                "description": "One or more categories failed!",
                 "color": 16711680,
                 "fields": [
-                  {"name": "Status", "value": "Failed", "inline": true},
                   {"name": "Categories", "value": "${{ needs.get-categories.outputs.categories }}", "inline": false}
                 ],
                 "footer": {"text": "Bot"},
