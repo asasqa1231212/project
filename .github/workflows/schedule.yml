@@ -17,7 +17,6 @@ jobs:
         with:
           repository: ${{ secrets.MAIN_REPO }}
           token: ${{ secrets.MY_PAT }}
-          path: project
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -29,23 +28,23 @@ jobs:
         with:
           node-version: 20
           cache: "pnpm"
-          cache-dependency-path: project/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
-        working-directory: project
         run: pnpm install --frozen-lockfile
 
       - name: Generate Prisma Client
-        working-directory: project
         run: pnpm exec prisma generate
 
       - name: Get categories from database
         id: get-categories
-        working-directory: project
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
+          echo "Current directory: $(pwd)"
+          echo "Scripts folder: $(ls scripts/)"
           categories=$(pnpm exec tsx scripts/get-categories-from-db.ts)
+          echo "Categories: $categories"
           echo "categories=$categories" >> $GITHUB_OUTPUT
 
   # Second job: Run price updates with matrix
