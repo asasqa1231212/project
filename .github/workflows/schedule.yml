@@ -6,24 +6,36 @@ on:
   workflow_dispatch:
 
 jobs:
-  # First job: Get categories and split into batches of 4
+  # First job: Get categories from main project repository
   get-categories:
     runs-on: ubuntu-latest
     outputs:
       batches: ${{ steps.split-batches.outputs.batches }}
     steps:
-      - name: Checkout repository
+      # Checkout the MAIN project repository to get categories
+      - name: Checkout main project
         uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.MAIN_REPO }}
+          token: ${{ secrets.MY_PAT }}
+          path: main-project
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Get categories and split into batches
-        id: split-batches
+      - name: Get categories from main project
+        id: get-categories
+        working-directory: main-project
         run: |
           categories=$(node scripts/get-categories.js)
+          echo "categories=$categories" >> $GITHUB_OUTPUT
+
+      - name: Split into batches of 4
+        id: split-batches
+        run: |
+          categories='${{ steps.get-categories.outputs.categories }}'
           # Split into batches of 4
           cat << 'SCRIPT' > /tmp/split_batches.js
           const categories = JSON.parse(process.argv[1]);
@@ -52,12 +64,27 @@ jobs:
       image: mcr.microsoft.com/playwright:v1.58.1-jammy
 
     steps:
+      # First get categories from main project
+      - name: Checkout main project for categories
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.MAIN_REPO }}
+          token: ${{ secrets.MY_PAT }}
+          path: main-project
+
+      # Then checkout the private repository for scraping
       - name: Checkout private repository
         uses: actions/checkout@v4
         with:
           repository: ${{ secrets.PRIVATE_REPO }}
           token: ${{ secrets.MY_PAT }}
           path: project
+
+      # Copy categories to project so scrape script can use them
+      - name: Copy categories to project
+        run: |
+          cp main-project/categories.json project/
+          cp main-project/scripts/get-categories.js project/scripts/
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
