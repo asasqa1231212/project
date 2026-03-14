@@ -39,8 +39,6 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
-          echo "Current directory: $(pwd)"
-          echo "Scripts folder: $(ls scripts/)"
           categories=$(pnpm exec tsx scripts/get-categories-from-db.ts)
           echo "Categories: $categories"
           echo "categories=$categories" >> $GITHUB_OUTPUT
@@ -66,8 +64,8 @@ jobs:
           token: ${{ secrets.MY_PAT }}
           path: project
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+      - name: Install pnpm
+        run: npm install -g pnpm
 
       - name: Setup Node
         uses: actions/setup-node@v4
