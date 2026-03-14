@@ -94,3 +94,56 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           NODE_ENV: production
         run: pnpm -s scrape:update-prices
+
+  # Notify on workflow completion
+  notify:
+    needs: run
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Discord notification - Success
+        if: needs.run.result == 'success'
+        env:
+          WEBHOOK: ${{ secrets.WEBHOOK }}
+          WEBHOOK_URL: ${{ secrets.WEBHOOK }}
+        run: |
+          curl -X POST \
+            -H "Content-Type: application/json" \
+            -d '{
+              "content": null,
+              "embeds": [{
+                "title": "✅ Price Update Completed",
+                "description": "All categories have been updated successfully!",
+                "color": 65280,
+                "fields": [
+                  {"name": "Status", "value": "Success", "inline": true},
+                  {"name": "Categories", "value": "${{ needs.get-categories.outputs.categories }}", "inline": true}
+                ],
+                "footer": {"text": "MaPrice Bot"},
+                "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"
+              }]
+            }' \
+            ${{ secrets.WEBHOOK }}
+
+      - name: Send Discord notification - Failure
+        if: needs.run.result == 'failure'
+        env:
+          WEBHOOK: ${{ secrets.WEBHOOK }}
+        run: |
+          curl -X POST \
+            -H "Content-Type: application/json" \
+            -d '{
+              "content": null,
+              "embeds": [{
+                "title": "❌ Price Update Failed",
+                "description": "The price update workflow has failed!",
+                "color": 16711680,
+                "fields": [
+                  {"name": "Status", "value": "Failed", "inline": true},
+                  {"name": "Failed Category", "value": "${{ matrix.category }}", "inline": true}
+                ],
+                "footer": {"text": "MaPrice Bot"},
+                "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"
+              }]
+            }' \
+            ${{ secrets.WEBHOOK }}
