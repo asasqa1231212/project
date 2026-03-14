@@ -52,7 +52,8 @@ jobs:
       max-parallel: 4
       matrix:
         category: ${{ fromJson(needs.get-categories.outputs.categories) }}
-
+    output:
+      results: ${{ steps.capture-results.outputs.results }}
     container:
       image: mcr.microsoft.com/playwright:v1.58.1-jammy
 
@@ -87,25 +88,47 @@ jobs:
         run: pnpm exec playwright install chromium --with-deps
 
       - name: Run price update
+        id: scrape
         working-directory: project
         env:
           ENABLE_SCRAPING: "true"
           CATEGORY: ${{ matrix.category }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           NODE_ENV: production
-        run: pnpm -s scrape:update-prices
+        run: |
+          OUTPUT=$(pnpm -s scrape:update-prices 2>&1)
+          echo "$OUTPUT"
+          # Extract stats from output
+          UPDATED=$(echo "$OUTPUT" | grep -oP '\d+(?= updated)' | head -1 || echo "0")
+          FAILED=$(echo "$OUTPUT" | grep -oP '\d+(?= failed)' | head -1 || echo "0")
+          PRICE_CHANGES=$(echo "$OUTPUT" | grep -oP '\d+(?= price changes)' | head -1 || echo "0")
+          echo "results={\"category\":\"${{ matrix.category }}\",\"updated\":\"$UPDATED\",\"failed\":\"$FAILED\",\"priceChanges\":\"$PRICE_CHANGES\"}" >> $GITHUB_OUTPUT
+
+      - name: Capture results
+        id: capture-results
+        run: |
+          echo "results=${{ steps.scrape.outputs.results }}" >> $GITHUB_OUTPUT
 
   # Notify on workflow completion
   notify:
-    needs: run
+    needs: [get-categories, run]
     if: always()
     runs-on: ubuntu-latest
     steps:
+      - name: Format results for Discord
+        id: format
+        run: |
+          # Collect all results
+          RESULTS=""
+          for result in ${{ needs.run.outputs.results }}; do
+            RESULTS="$RESULTS$result,"
+          done
+          # Remove trailing comma
+          RESULTS="${RESULTS%,}"
+          echo "formatted=$RESULTS" >> $GITHUB_OUTPUT
+
       - name: Send Discord notification - Success
         if: needs.run.result == 'success'
-        env:
-          WEBHOOK: ${{ secrets.WEBHOOK }}
-          WEBHOOK_URL: ${{ secrets.WEBHOOK }}
         run: |
           curl -X POST \
             -H "Content-Type: application/json" \
@@ -113,11 +136,10 @@ jobs:
               "content": null,
               "embeds": [{
                 "title": "✅ Price Update Completed",
-                "description": "All categories have been updated successfully!",
+                "description": "All categories have been updated!",
                 "color": 65280,
                 "fields": [
-                  {"name": "Status", "value": "Success", "inline": true},
-                  {"name": "Categories", "value": "${{ needs.get-categories.outputs.categories }}", "inline": true}
+                  {"name": "Categories Updated", "value": "${{ needs.get-categories.outputs.categories }}", "inline": false}
                 ],
                 "footer": {"text": "Bot"},
                 "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"
@@ -127,8 +149,6 @@ jobs:
 
       - name: Send Discord notification - Failure
         if: needs.run.result == 'failure'
-        env:
-          WEBHOOK: ${{ secrets.WEBHOOK }}
         run: |
           curl -X POST \
             -H "Content-Type: application/json" \
@@ -136,11 +156,11 @@ jobs:
               "content": null,
               "embeds": [{
                 "title": "❌ Price Update Failed",
-                "description": "The price update workflow has failed!",
+                "description": "One or more categories failed to update!",
                 "color": 16711680,
                 "fields": [
                   {"name": "Status", "value": "Failed", "inline": true},
-                  {"name": "Failed Category", "value": "${{ matrix.category }}", "inline": true}
+                  {"name": "Categories", "value": "${{ needs.get-categories.outputs.categories }}", "inline": false}
                 ],
                 "footer": {"text": "Bot"},
                 "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"
