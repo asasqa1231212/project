@@ -19,33 +19,28 @@ jobs:
           repository: ${{ secrets.MAIN_REPO }}
           token: ${{ secrets.MY_PAT }}
           path: main-project
+          sparse-checkout: |
+            categories.json
+          sparse-checkout-cone-mode: false
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Get categories from main project
-        id: get-categories
-        working-directory: main-project
-        run: |
-          categories=$(node scripts/get-categories.js)
-          echo "categories=$categories" >> $GITHUB_OUTPUT
-
-      - name: Split into batches of 4
+      - name: Read and split categories into batches
         id: split-batches
         run: |
-          categories='${{ steps.get-categories.outputs.categories }}'
-          # Split into batches of 4
-          cat << 'SCRIPT' > /tmp/split_batches.js
-          const categories = JSON.parse(process.argv[1]);
+          # Read categories from JSON file
+          categories=$(cat main-project/categories.json | jq -r '.categories | join(" ")')
+          echo "Categories: $categories"
+          
+          # Split into batches of 4 and output as JSON array
+          cat << 'BATCH_SCRIPT' > /tmp/split_batches.js
+          const categories = process.argv[1].split(' ').filter(c => c);
           const batchSize = 4;
           const batches = [];
           for (let i = 0; i < categories.length; i += batchSize) {
             batches.push(categories.slice(i, i + batchSize));
           }
           console.log(JSON.stringify(batches));
-          SCRIPT
+          BATCH_SCRIPT
+          
           batches=$(node /tmp/split_batches.js "$categories")
           echo "batches=$batches" >> $GITHUB_OUTPUT
           echo "Found $(echo $batches | jq '. | length') batches"
@@ -64,15 +59,7 @@ jobs:
       image: mcr.microsoft.com/playwright:v1.58.1-jammy
 
     steps:
-      # First get categories from main project
-      - name: Checkout main project for categories
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ secrets.MAIN_REPO }}
-          token: ${{ secrets.MY_PAT }}
-          path: main-project
-
-      # Then checkout the private repository for scraping
+      # Checkout the private repository for scraping
       - name: Checkout private repository
         uses: actions/checkout@v4
         with:
@@ -80,11 +67,20 @@ jobs:
           token: ${{ secrets.MY_PAT }}
           path: project
 
+      # Also checkout main project to get categories.json
+      - name: Checkout main project for categories
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.MAIN_REPO }}
+          token: ${{ secrets.MY_PAT }}
+          path: main-project
+          sparse-checkout: |
+            categories.json
+          sparse-checkout-cone-mode: false
+
       # Copy categories to project so scrape script can use them
       - name: Copy categories to project
-        run: |
-          cp main-project/categories.json project/
-          cp main-project/scripts/get-categories.js project/scripts/
+        run: cp main-project/categories.json project/
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -127,3 +123,4 @@ jobs:
             CATEGORY="$category" pnpm -s scrape:update-prices
             echo ""
           done
+
