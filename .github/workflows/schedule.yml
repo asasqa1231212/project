@@ -18,17 +18,16 @@ jobs:
         with:
           repository: ${{ secrets.MAIN_REPO }}
           token: ${{ secrets.MY_PAT }}
-          path: main-project
-          sparse-checkout: |
-            categories.json
-          sparse-checkout-cone-mode: false
 
-      - name: Read and split categories into batches
+      - name: Read categories and split into batches
         id: split-batches
         run: |
+          echo "Current directory: $(pwd)"
+          echo "Files in repo: $(ls -la)"
+          
           # Read categories from JSON file
-          categories=$(cat main-project/categories.json | jq -r '.categories | join(" ")')
-          echo "Categories: $categories"
+          categories=$(cat categories.json | jq -r '.categories | join(" ")')
+          echo "Categories found: $categories"
           
           # Split into batches of 4 and output as JSON array
           cat << 'BATCH_SCRIPT' > /tmp/split_batches.js
@@ -59,28 +58,13 @@ jobs:
       image: mcr.microsoft.com/playwright:v1.58.1-jammy
 
     steps:
-      # Checkout the private repository for scraping
-      - name: Checkout private repository
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ secrets.PRIVATE_REPO }}
-          token: ${{ secrets.MY_PAT }}
-          path: project
-
-      # Also checkout main project to get categories.json
-      - name: Checkout main project for categories
+      # Checkout the private repository (same as MAIN_REPO)
+      - name: Checkout project
         uses: actions/checkout@v4
         with:
           repository: ${{ secrets.MAIN_REPO }}
           token: ${{ secrets.MY_PAT }}
-          path: main-project
-          sparse-checkout: |
-            categories.json
-          sparse-checkout-cone-mode: false
-
-      # Copy categories to project so scrape script can use them
-      - name: Copy categories to project
-        run: cp main-project/categories.json project/
+          path: project
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
