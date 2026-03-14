@@ -26,10 +26,9 @@ jobs:
 
       - name: Read categories and split into batches
         id: split-batches
-        run: |
-          # Read categories from JSON file
-          const fs = require('fs');
-          const data = JSON.parse(fs.readFileSync('categories.json', 'utf8'));
+        run: node -e '
+          const fs = require("fs");
+          const data = JSON.parse(fs.readFileSync("categories.json", "utf8"));
           const categories = data.categories;
           
           // Split into batches of 4
@@ -39,11 +38,12 @@ jobs:
             batches.push(categories.slice(i, i + batchSize));
           }
           
-          console.log('Categories found:', categories.length);
-          console.log('Batches:', batches.length);
+          console.log("Categories found:", categories.length);
+          console.log("Batches:", batches.length);
           
           // Output as JSON string for matrix
-          console.log('::set-output name=batches::' + JSON.stringify(batches));
+          console.log("::set-output name=batches::" + JSON.stringify(batches));
+        '
 
   # Second job: Run price updates with batches (4 categories per job)
   run:
@@ -98,17 +98,18 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           NODE_ENV: production
         run: |
-          # Get categories from matrix batch as JSON
-          BATCH='${{ needs.get-categories.outputs.batches }}'
+          # Get categories from matrix batch
+          CATEGORIES='${{ matrix.batch }}'
           
-          # Use Node.js to parse and iterate (jq not available in container)
+          # Use Node.js to iterate
           node -e "
-            const batch = JSON.parse(process.env.BATCH);
-            const categories = ${{ matrix.batch }};
-            console.log('Running categories:', categories);
-            categories.forEach(cat => {
-              console.log('Processing:', cat);
+            const categories = JSON.parse('${{ matrix.batch }}'.replace(/'/g, '\"'));
+            console.log('Categories in this batch:', categories);
+            categories.forEach(function(cat) {
+              console.log('========================================');
+              console.log('Processing category:', cat);
+              console.log('========================================');
               require('child_process').execSync('CATEGORY=\"' + cat + '\" pnpm -s scrape:update-prices', {stdio: 'inherit'});
+              console.log('');
             });
           "
-
