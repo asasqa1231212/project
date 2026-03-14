@@ -6,46 +6,49 @@ on:
   workflow_dispatch:
 
 jobs:
-  # First job: Get categories from main project repository
+  # First job: Get categories from database
   get-categories:
     runs-on: ubuntu-latest
     outputs:
-      batches: ${{ steps.split-batches.outputs.batches }}
+      categories: ${{ steps.get-categories.outputs.categories }}
     steps:
-      # Checkout the MAIN project repository to get categories
-      - name: Checkout main project
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           repository: ${{ secrets.MAIN_REPO }}
           token: ${{ secrets.MY_PAT }}
+          path: project
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: "pnpm"
+          cache-dependency-path: project/pnpm-lock.yaml
 
-      - name: Read categories and split into batches
-        id: split-batches
-        run: node -e '
-          const fs = require("fs");
-          const data = JSON.parse(fs.readFileSync("categories.json", "utf8"));
-          const categories = data.categories;
-          
-          // Split into batches of 4
-          const batchSize = 4;
-          const batches = [];
-          for (let i = 0; i < categories.length; i += batchSize) {
-            batches.push(categories.slice(i, i + batchSize));
-          }
-          
-          console.log("Categories found:", categories.length);
-          console.log("Batches:", batches.length);
-          
-          // Output as JSON string for matrix
-          console.log("::set-output name=batches::" + JSON.stringify(batches));
-        '
+      - name: Install dependencies
+        working-directory: project
+        run: pnpm install --frozen-lockfile
 
-  # Second job: Run price updates with batches (4 categories per job)
+      - name: Generate Prisma Client
+        working-directory: project
+        run: pnpm exec prisma generate
+
+      - name: Get categories from database
+        id: get-categories
+        working-directory: project
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          categories=$(pnpm exec tsx scripts/get-categories-from-db.ts)
+          echo "categories=$categories" >> $GITHUB_OUTPUT
+
+  # Second job: Run price updates with matrix
   run:
     needs: get-categories
     runs-on: ubuntu-latest
@@ -53,14 +56,13 @@ jobs:
       fail-fast: false
       max-parallel: 4
       matrix:
-        batch: ${{ fromJson(needs.get-categories.outputs.batches) }}
+        category: ${{ fromJson(needs.get-categories.outputs.categories) }}
 
     container:
       image: mcr.microsoft.com/playwright:v1.58.1-jammy
 
     steps:
-      # Checkout the private repository (same as MAIN_REPO)
-      - name: Checkout project
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           repository: ${{ secrets.MAIN_REPO }}
@@ -91,25 +93,11 @@ jobs:
         working-directory: project
         run: pnpm exec playwright install chromium --with-deps
 
-      - name: Run price updates for batch
+      - name: Run price update
         working-directory: project
         env:
           ENABLE_SCRAPING: "true"
+          CATEGORY: ${{ matrix.category }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           NODE_ENV: production
-        run: |
-          # Get categories from matrix batch
-          CATEGORIES='${{ matrix.batch }}'
-          
-          # Use Node.js to iterate
-          node -e "
-            const categories = JSON.parse('${{ matrix.batch }}'.replace(/'/g, '\"'));
-            console.log('Categories in this batch:', categories);
-            categories.forEach(function(cat) {
-              console.log('========================================');
-              console.log('Processing category:', cat);
-              console.log('========================================');
-              require('child_process').execSync('CATEGORY=\"' + cat + '\" pnpm -s scrape:update-prices', {stdio: 'inherit'});
-              console.log('');
-            });
-          "
+        run: pnpm -s scrape:update-prices
