@@ -19,30 +19,31 @@ jobs:
           repository: ${{ secrets.MAIN_REPO }}
           token: ${{ secrets.MY_PAT }}
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
       - name: Read categories and split into batches
         id: split-batches
         run: |
-          echo "Current directory: $(pwd)"
-          echo "Files in repo: $(ls -la)"
-          
           # Read categories from JSON file
-          categories=$(cat categories.json | jq -r '.categories | join(" ")')
-          echo "Categories found: $categories"
+          const fs = require('fs');
+          const data = JSON.parse(fs.readFileSync('categories.json', 'utf8'));
+          const categories = data.categories;
           
-          # Split into batches of 4 and output as JSON array
-          cat << 'BATCH_SCRIPT' > /tmp/split_batches.js
-          const categories = process.argv[1].split(' ').filter(c => c);
+          // Split into batches of 4
           const batchSize = 4;
           const batches = [];
           for (let i = 0; i < categories.length; i += batchSize) {
             batches.push(categories.slice(i, i + batchSize));
           }
-          console.log(JSON.stringify(batches));
-          BATCH_SCRIPT
           
-          batches=$(node /tmp/split_batches.js "$categories")
-          echo "batches=$batches" >> $GITHUB_OUTPUT
-          echo "Found $(echo $batches | jq '. | length') batches"
+          console.log('Categories found:', categories.length);
+          console.log('Batches:', batches.length);
+          
+          // Output as JSON string for matrix
+          console.log('::set-output name=batches::' + JSON.stringify(batches));
 
   # Second job: Run price updates with batches (4 categories per job)
   run:
@@ -97,14 +98,17 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           NODE_ENV: production
         run: |
-          # Get categories from matrix batch as JSON array
-          BATCH='${{ matrix.batch }}'
-          # Parse JSON and run each category sequentially
-          for category in $(echo "$BATCH" | jq -r '.[]'); do
-            echo "========================================"
-            echo "Processing category: $category"
-            echo "========================================"
-            CATEGORY="$category" pnpm -s scrape:update-prices
-            echo ""
-          done
+          # Get categories from matrix batch as JSON
+          BATCH='${{ needs.get-categories.outputs.batches }}'
+          
+          # Use Node.js to parse and iterate (jq not available in container)
+          node -e "
+            const batch = JSON.parse(process.env.BATCH);
+            const categories = ${{ matrix.batch }};
+            console.log('Running categories:', categories);
+            categories.forEach(cat => {
+              console.log('Processing:', cat);
+              require('child_process').execSync('CATEGORY=\"' + cat + '\" pnpm -s scrape:update-prices', {stdio: 'inherit'});
+            });
+          "
 
