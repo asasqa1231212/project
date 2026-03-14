@@ -6,38 +6,50 @@ on:
   workflow_dispatch:
 
 jobs:
-  run:
+  # First job: Get categories and split into batches of 4
+  get-categories:
     runs-on: ubuntu-latest
+    outputs:
+      batches: ${{ steps.split-batches.outputs.batches }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    container:
-      image: mcr.microsoft.com/playwright:v1.58.1-jammy
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
 
+      - name: Get categories and split into batches
+        id: split-batches
+        run: |
+          categories=$(node scripts/get-categories.js)
+          # Split into batches of 4
+          cat << 'SCRIPT' > /tmp/split_batches.js
+          const categories = JSON.parse(process.argv[1]);
+          const batchSize = 4;
+          const batches = [];
+          for (let i = 0; i < categories.length; i += batchSize) {
+            batches.push(categories.slice(i, i + batchSize));
+          }
+          console.log(JSON.stringify(batches));
+          SCRIPT
+          batches=$(node /tmp/split_batches.js "$categories")
+          echo "batches=$batches" >> $GITHUB_OUTPUT
+          echo "Found $(echo $batches | jq '. | length') batches"
+
+  # Second job: Run price updates with batches (4 categories per job)
+  run:
+    needs: get-categories
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       max-parallel: 4
       matrix:
-        category:
-          - GPU
-          - CPU
-          - RAM
-          - Storage
-          - Motherboard
-          - PSU
-          - Case
-          - Cooler
-          - Monitor
-          - Laptop
-          - Headphones
-          - Keyboards
-          - Mice
-          - Speakers
-          - Webcams
-          - CaseFans
-          - FanControllers
-          - ThermalCompound
-          - MonitorSupport
-          - Manettes
-          - UPS
+        batch: ${{ fromJson(needs.get-categories.outputs.batches) }}
+
+    container:
+      image: mcr.microsoft.com/playwright:v1.58.1-jammy
 
     steps:
       - name: Checkout private repository
@@ -63,14 +75,28 @@ jobs:
         working-directory: project
         run: pnpm install --frozen-lockfile
 
+      - name: Generate Prisma Client
+        working-directory: project
+        run: pnpm exec prisma generate
+
       - name: Install Playwright browsers
         working-directory: project
         run: pnpm exec playwright install chromium --with-deps
 
-      - name: Run price update
+      - name: Run price updates for batch
         working-directory: project
         env:
           ENABLE_SCRAPING: "true"
-          CATEGORY: ${{ matrix.category }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: pnpm -s scrape:update-prices
+          NODE_ENV: production
+        run: |
+          # Get categories from matrix batch as JSON array
+          BATCH='${{ matrix.batch }}'
+          # Parse JSON and run each category sequentially
+          for category in $(echo "$BATCH" | jq -r '.[]'); do
+            echo "========================================"
+            echo "Processing category: $category"
+            echo "========================================"
+            CATEGORY="$category" pnpm -s scrape:update-prices
+            echo ""
+          done
