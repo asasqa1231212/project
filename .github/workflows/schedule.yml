@@ -119,7 +119,7 @@ jobs:
                   {"name": "Status", "value": "Success", "inline": true},
                   {"name": "Categories", "value": "${{ needs.get-categories.outputs.categories }}", "inline": true}
                 ],
-                "footer": {"text": "MaPrice Bot"},
+                "footer": {"text": "Bot"},
                 "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"
               }]
             }' \
@@ -142,7 +142,7 @@ jobs:
                   {"name": "Status", "value": "Failed", "inline": true},
                   {"name": "Failed Category", "value": "${{ matrix.category }}", "inline": true}
                 ],
-                "footer": {"text": "MaPrice Bot"},
+                "footer": {"text": "Bot"},
                 "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"
               }]
             }' \
