@@ -50,6 +50,8 @@ jobs:
   # Second job: Run price updates with matrix
   run:
     needs: get-categories
+    # ENHANCEMENT 1: Prevent GitHub Actions from crashing if the database returns 0 categories []
+    if: ${{ needs.get-categories.outputs.categories != '[]' && needs.get-categories.outputs.categories != '' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -71,6 +73,14 @@ jobs:
 
       - name: Install pnpm
         run: npm install -g pnpm
+
+      # ENHANCEMENT 2: Cache dependencies inside the container to speed up parallel jobs
+      - name: Setup Node (for pnpm caching)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "pnpm"
+          cache-dependency-path: project/pnpm-lock.yaml
 
       - name: Install dependencies
         working-directory: project
