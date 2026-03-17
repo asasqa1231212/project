@@ -3,7 +3,7 @@ name: products-scraping
 
 on:
   schedule:
-    - cron: "0 * * * *" # every hour
+    - cron: "0 * * * *"
   workflow_dispatch:
 
 jobs:
@@ -19,16 +19,21 @@ jobs:
           repository: ${{ secrets.MAIN_REPO }}
           token: ${{ secrets.MY_PAT }}
 
+      # ✅ Install pnpm FIRST (before setup-node cache)
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      # ✅ Then setup node (so cache works correctly)
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: "pnpm"
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
+      - name: Verify pnpm
+        run: pnpm -v
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -49,7 +54,6 @@ jobs:
 
           echo "Raw categories: $categories"
 
-          # safety fallback
           if [ -z "$categories" ] || [ "$categories" = "null" ]; then
             categories="[]"
           fi
@@ -78,8 +82,11 @@ jobs:
           token: ${{ secrets.MY_PAT }}
           path: project
 
+      # ✅ Install pnpm INSIDE container
       - name: Install pnpm
-        run: npm install -g pnpm
+        run: |
+          npm install -g pnpm
+          pnpm -v
 
       - name: Install dependencies
         working-directory: project
