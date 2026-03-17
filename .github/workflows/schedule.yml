@@ -1,15 +1,16 @@
 name: products-scraping
+
 on:
   schedule:
     - cron: "0 * * * *"
   workflow_dispatch:
 
 jobs:
-  # First job: Get categories from database
   get-categories:
     runs-on: ubuntu-latest
     outputs:
-      categories: ${{ steps.get-categories.outputs.categories }}
+      categories: ${{ steps.get.outputs.categories }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -17,49 +18,52 @@ jobs:
           repository: ${{ secrets.MAIN_REPO }}
           token: ${{ secrets.MY_PAT }}
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Setup Node
+      - name: Setup Node + pnpm
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: "pnpm"
-          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Enable pnpm
+        run: corepack enable
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Generate Prisma Client
-        run: pnpm exec prisma generate
-
-      - name: Deploy Database Migrations
+      - name: Prepare Prisma
+        run: |
+          pnpm exec prisma generate
+          pnpm exec prisma migrate deploy
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: pnpm exec prisma migrate deploy
 
-      - name: Get categories from database
-        id: get-categories
+      - name: Get categories
+        id: get
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
           categories=$(pnpm exec tsx scripts/get-categories-from-db.ts)
-          echo "Categories: $categories"
+
+          echo "Raw categories: $categories"
+
+          # fallback safety
+          if [ -z "$categories" ] || [ "$categories" = "null" ]; then
+            categories="[]"
+          fi
+
           echo "categories=$categories" >> $GITHUB_OUTPUT
 
-  # Second job: Run price updates with matrix
   run:
     needs: get-categories
-    # ENHANCEMENT 1: Prevent GitHub Actions from crashing if the database returns 0 categories []
-    if: ${{ needs.get-categories.outputs.categories != '[]' && needs.get-categories.outputs.categories != '' }}
+    if: ${{ needs.get-categories.outputs.categories != '[]' }}
     runs-on: ubuntu-latest
+
     strategy:
       fail-fast: false
       max-parallel: 4
       matrix:
         category: ${{ fromJson(needs.get-categories.outputs.categories) }}
-    
-    # This container ALREADY has Node.js and Playwright browsers!
+
     container:
       image: mcr.microsoft.com/playwright:v1.58.1-jammy
 
@@ -71,26 +75,18 @@ jobs:
           token: ${{ secrets.MY_PAT }}
           path: project
 
-      - name: Install pnpm
-        run: npm install -g pnpm
-
-      # ENHANCEMENT 2: Cache dependencies inside the container to speed up parallel jobs
-      - name: Setup Node (for pnpm caching)
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: "pnpm"
-          cache-dependency-path: project/pnpm-lock.yaml
+      - name: Enable pnpm
+        run: corepack enable
 
       - name: Install dependencies
         working-directory: project
         run: pnpm install --frozen-lockfile
 
-      - name: Generate Prisma Client
+      - name: Setup Prisma
         working-directory: project
         run: pnpm exec prisma generate
 
-      - name: Run price update
+      - name: Run scraper
         working-directory: project
         env:
           ENABLE_SCRAPING: "true"
@@ -99,22 +95,55 @@ jobs:
           NODE_ENV: production
         run: pnpm -s scrape:update-prices
 
-  # Notify on workflow completion
   notify:
     needs: [get-categories, run]
     if: always()
     runs-on: ubuntu-latest
+
     steps:
-      - name: Send Discord notification - Success
+      - name: Success notification
         if: needs.run.result == 'success'
+        env:
+          CATEGORIES: ${{ needs.get-categories.outputs.categories }}
+          URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          WEBHOOK: ${{ secrets.WEBHOOK }}
         run: |
-          curl -X POST \
-            -H "Content-Type: application/json" \
-            -d '{
-              "embeds": [{
-                "title": "✅ Tracker Updated",
-                "description": "The automated price scraper has successfully completed its run.",
-                "color": 5763719,
-                "fields": [
-                  {"name": "Status", "value": "🟢 All categories synced successfully", "inline": false},
-                  {"name": "Categories Processed", "value": "
+          jq -n \
+            --arg cat "$CATEGORIES" \
+            --arg url "$URL" \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{
+              embeds: [{
+                title: "✅ Tracker Updated",
+                description: "Scraping completed successfully.",
+                color: 5763719,
+                fields: [
+                  {name: "Status", value: "🟢 All categories processed", inline: false},
+                  {name: "Categories", value: $cat, inline: false},
+                  {name: "Run", value: $url, inline: false}
+                ],
+                timestamp: $date
+              }]
+            }' | curl -s -H "Content-Type: application/json" -d @- $WEBHOOK
+
+      - name: Failure notification
+        if: needs.run.result != 'success'
+        env:
+          URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          WEBHOOK: ${{ secrets.WEBHOOK }}
+        run: |
+          jq -n \
+            --arg url "$URL" \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{
+              embeds: [{
+                title: "❌ Tracker Failed",
+                description: "Some scraping jobs failed.",
+                color: 15548997,
+                fields: [
+                  {name: "Status", value: "🔴 Failure detected", inline: false},
+                  {name: "Logs", value: $url, inline: false}
+                ],
+                timestamp: $date
+              }]
+            }' | curl -s -H "Content-Type: application/json" -d @- $WEBHOOK
