@@ -1,8 +1,9 @@
+
 name: products-scraping
 
 on:
   schedule:
-    - cron: "0 * * * *"
+    - cron: "0 * * * *" # every hour
   workflow_dispatch:
 
 jobs:
@@ -18,24 +19,26 @@ jobs:
           repository: ${{ secrets.MAIN_REPO }}
           token: ${{ secrets.MY_PAT }}
 
-      - name: Setup Node + pnpm
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: "pnpm"
 
-      - name: Enable pnpm
-        run: corepack enable
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Prepare Prisma
+      - name: Setup Prisma
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
           pnpm exec prisma generate
           pnpm exec prisma migrate deploy
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
       - name: Get categories
         id: get
@@ -46,7 +49,7 @@ jobs:
 
           echo "Raw categories: $categories"
 
-          # fallback safety
+          # safety fallback
           if [ -z "$categories" ] || [ "$categories" = "null" ]; then
             categories="[]"
           fi
@@ -75,8 +78,8 @@ jobs:
           token: ${{ secrets.MY_PAT }}
           path: project
 
-      - name: Enable pnpm
-        run: corepack enable
+      - name: Install pnpm
+        run: npm install -g pnpm
 
       - name: Install dependencies
         working-directory: project
