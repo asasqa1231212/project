@@ -19,13 +19,9 @@ jobs:
           repository: ${{ secrets.MAIN_REPO }}
           token: ${{ secrets.MY_PAT }}
 
-      # ✅ Install pnpm FIRST (before setup-node cache)
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 9
 
-      # ✅ Then setup node (so cache works correctly)
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -82,8 +78,7 @@ jobs:
           token: ${{ secrets.MY_PAT }}
           path: project
 
-      # ✅ Install pnpm INSIDE container
-      - name: Install pnpm
+      - name: Install pnpm (container)
         run: |
           npm install -g pnpm
           pnpm -v
