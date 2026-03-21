@@ -5,6 +5,10 @@ on:
     - cron: "0 4 */3 * *"
   workflow_dispatch:
 
+concurrency:
+  group: new-products-importer
+  cancel-in-progress: false
+
 jobs:
   # ==========================================
   # 1. FETCH ACTIVE CATEGORIES FROM DATABASE
@@ -19,12 +23,12 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ secrets.MAIN_REPO }}
-          token: ${{ secrets.MY_PAT__FOR_SCRAPER }}
+          token: ${{ secrets.MY_PAT }}
 
       - name: ⚙️ Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          # Tells the action to look at the package.json we just checked out
+          version: 9
           package_json_file: package.json
 
       - name: ⚙️ Setup Node
@@ -46,11 +50,13 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
-          categories=$(pnpm exec tsx scripts/get-categories-from-db.ts)
+          categories=$(pnpm exec tsx scripts/get-categories-from-db.ts | tail -n 1)
           echo "Raw categories: $categories"
+
           if [ -z "$categories" ] || [ "$categories" = "null" ]; then
             categories="[]"
           fi
+
           echo "categories=$categories" >> $GITHUB_OUTPUT
 
   # ==========================================
@@ -61,25 +67,29 @@ jobs:
     if: ${{ needs.get-categories.outputs.categories != '[]' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    
+
     strategy:
       fail-fast: false
       max-parallel: 2
       matrix:
         category: ${{ fromJson(needs.get-categories.outputs.categories) }}
 
+    defaults:
+      run:
+        working-directory: project
+
     steps:
       - name: 📥 Checkout Private Repo
         uses: actions/checkout@v4
         with:
           repository: ${{ secrets.MAIN_REPO }}
-          token: ${{ secrets.MY_PAT__FOR_SCRAPER }}
+          token: ${{ secrets.MY_PAT }}
           path: project
 
       - name: ⚙️ Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          # IMPORTANT: Point to the package.json inside the 'project' subfolder
+          version: 9
           package_json_file: project/package.json
 
       - name: ⚙️ Setup Node
@@ -90,21 +100,26 @@ jobs:
           cache-dependency-path: project/pnpm-lock.yaml
 
       - name: 📦 Install dependencies
-        working-directory: project
         run: pnpm install --frozen-lockfile
 
+      # ✅ Cache Playwright browsers
+      - name: 💾 Cache Playwright
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('project/pnpm-lock.yaml') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
       - name: 🎭 Install Playwright Browsers
-        working-directory: project
         run: npx playwright install --with-deps chromium
 
       - name: 🗄️ Setup Prisma
-        working-directory: project
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: pnpm exec prisma generate
 
       - name: 🕵️‍♂️ Run Retailer 1
-        working-directory: project
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           CATEGORY: ${{ matrix.category }}
