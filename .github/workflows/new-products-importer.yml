@@ -1,184 +1,184 @@
-name: 🆕 New Products Importer
-
-on:
-  schedule:
-    - cron: "0 4 */3 * *"
-  workflow_dispatch:
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
-concurrency:
-  group: new-products-importer
-  cancel-in-progress: false
-
-jobs:
-  # ==========================================
-  # 1. FETCH ACTIVE CATEGORIES FROM DATABASE
-  # ==========================================
-  get-categories:
-    runs-on: ubuntu-latest
-    outputs:
-      categories: ${{ steps.get.outputs.categories }}
-
-    steps:
-      - name: 📥 Checkout repository
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ secrets.MAIN_REPO }}
-          token: ${{ secrets.MY_PAT }}
-
-      - name: ⚙️ Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          package_json_file: package.json
-
-      - name: ⚙️ Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: "pnpm"
-
-      - name: 📦 Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: 🗄️ Setup Prisma
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: pnpm exec prisma generate
-
-      - name: 🔍 Get categories
-        id: get
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: |
-          categories=$(pnpm exec tsx scripts/get-categories-from-db.ts | tail -n 1)
-          echo "Raw categories: $categories"
-
-          if [ -z "$categories" ] || [ "$categories" = "null" ]; then
-            categories="[]"
-          fi
-
-          echo "categories=$categories" >> $GITHUB_OUTPUT
-
-  # ==========================================
-  # 2. RUN IMPORTERS VIA MATRIX
-  # ==========================================
-  import-new-products:
-    needs: get-categories
-    if: ${{ needs.get-categories.outputs.categories != '[]' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        category: ${{ fromJson(needs.get-categories.outputs.categories) }}
-
-    defaults:
-      run:
-        working-directory: project
-
-    steps:
-      - name: 📥 Checkout Private Repo
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ secrets.MAIN_REPO }}
-          token: ${{ secrets.MY_PAT }}
-          path: project
-
-      - name: ⚙️ Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          package_json_file: project/package.json
-
-      - name: ⚙️ Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: "pnpm"
-          cache-dependency-path: project/pnpm-lock.yaml
-
-      - name: 📦 Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      # ✅ Cache Playwright browsers
-      - name: 💾 Cache Playwright
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('project/pnpm-lock.yaml') }}
-          restore-keys: |
-            playwright-${{ runner.os }}-
-
-      - name: 🎭 Install Playwright Browsers
-        run: npx playwright install --with-deps chromium
-
-      - name: 🗄️ Setup Prisma
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: pnpm exec prisma generate
-
-      - name: 🕵️‍♂️ Run Retailer 1
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          CATEGORY: ${{ matrix.category }}
-          SCRIPT_PATH: ${{ secrets.RETAILER_1_SCRIPT }}
-        run: pnpm exec tsx $SCRIPT_PATH
-
-  # ==========================================
-  # 3. NOTIFICATIONS
-  # ==========================================
-  notify:
-    needs: [get-categories, import-new-products]
-    if: always()
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: ✅ Success notification
-        if: needs.import-new-products.result == 'success'
-        env:
-          CATEGORIES: ${{ needs.get-categories.outputs.categories }}
-          URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          WEBHOOK: ${{ secrets.WEBHOOK }}
-        run: |
-          jq -n \
-            --arg cat "$CATEGORIES" \
-            --arg url "$URL" \
-            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{
-              embeds: [{
-                title: "✅ New Products Imported",
-                description: "The 3-day discovery scraper completed successfully.",
-                color: 5763719,
-                fields: [
-                  {name: "Status", value: "🟢 All DB categories processed", inline: false},
-                  {name: "Categories Checked", value: $cat, inline: false},
-                  {name: "Run Details", value: $url, inline: false}
-                ],
-                timestamp: $date
-              }]
-            }' | curl -s -H "Content-Type: application/json" -d @- $WEBHOOK
-
-      - name: ❌ Failure notification
-        if: needs.import-new-products.result != 'success'
-        env:
-          URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          WEBHOOK: ${{ secrets.WEBHOOK }}
-        run: |
-          jq -n \
-            --arg url "$URL" \
-            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{
-              embeds: [{
-                title: "❌ Importer Failed",
-                description: "The New Products Importer job failed.",
-                color: 15548997,
-                fields: [
-                  {name: "Status", value: "🔴 Failure detected", inline: false},
-                  {name: "Logs", value: $url, inline: false}
-                ],
-                timestamp: $date
-              }]
-            }' | curl -s -H "Content-Type: application/json" -d @- $WEBHOOK
+# name: 🆕 New Products Importer
+# 
+# on:
+#   schedule:
+#     - cron: "0 4 */3 * *"
+#   workflow_dispatch:
+# 
+# env:
+#   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+# 
+# concurrency:
+#   group: new-products-importer
+#   cancel-in-progress: false
+# 
+# jobs:
+#   # ==========================================
+#   # 1. FETCH ACTIVE CATEGORIES FROM DATABASE
+#   # ==========================================
+#   get-categories:
+#     runs-on: ubuntu-latest
+#     outputs:
+#       categories: ${{ steps.get.outputs.categories }}
+# 
+#     steps:
+#       - name: 📥 Checkout repository
+#         uses: actions/checkout@v4
+#         with:
+#           repository: ${{ secrets.MAIN_REPO }}
+#           token: ${{ secrets.MY_PAT }}
+# 
+#       - name: ⚙️ Setup pnpm
+#         uses: pnpm/action-setup@v4
+#         with:
+#           package_json_file: package.json
+# 
+#       - name: ⚙️ Setup Node
+#         uses: actions/setup-node@v4
+#         with:
+#           node-version: 20
+#           cache: "pnpm"
+# 
+#       - name: 📦 Install dependencies
+#         run: pnpm install --frozen-lockfile
+# 
+#       - name: 🗄️ Setup Prisma
+#         env:
+#           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+#         run: pnpm exec prisma generate
+# 
+#       - name: 🔍 Get categories
+#         id: get
+#         env:
+#           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+#         run: |
+#           categories=$(pnpm exec tsx scripts/get-categories-from-db.ts | tail -n 1)
+#           echo "Raw categories: $categories"
+# 
+#           if [ -z "$categories" ] || [ "$categories" = "null" ]; then
+#             categories="[]"
+#           fi
+# 
+#           echo "categories=$categories" >> $GITHUB_OUTPUT
+# 
+#   # ==========================================
+#   # 2. RUN IMPORTERS VIA MATRIX
+#   # ==========================================
+#   import-new-products:
+#     needs: get-categories
+#     if: ${{ needs.get-categories.outputs.categories != '[]' }}
+#     runs-on: ubuntu-latest
+#     timeout-minutes: 120
+# 
+#     strategy:
+#       fail-fast: false
+#       max-parallel: 2
+#       matrix:
+#         category: ${{ fromJson(needs.get-categories.outputs.categories) }}
+# 
+#     defaults:
+#       run:
+#         working-directory: project
+# 
+#     steps:
+#       - name: 📥 Checkout Private Repo
+#         uses: actions/checkout@v4
+#         with:
+#           repository: ${{ secrets.MAIN_REPO }}
+#           token: ${{ secrets.MY_PAT }}
+#           path: project
+# 
+#       - name: ⚙️ Setup pnpm
+#         uses: pnpm/action-setup@v4
+#         with:
+#           package_json_file: project/package.json
+# 
+#       - name: ⚙️ Setup Node
+#         uses: actions/setup-node@v4
+#         with:
+#           node-version: 20
+#           cache: "pnpm"
+#           cache-dependency-path: project/pnpm-lock.yaml
+# 
+#       - name: 📦 Install dependencies
+#         run: pnpm install --frozen-lockfile
+# 
+#       # ✅ Cache Playwright browsers
+#       - name: 💾 Cache Playwright
+#         uses: actions/cache@v4
+#         with:
+#           path: ~/.cache/ms-playwright
+#           key: playwright-${{ runner.os }}-${{ hashFiles('project/pnpm-lock.yaml') }}
+#           restore-keys: |
+#             playwright-${{ runner.os }}-
+# 
+#       - name: 🎭 Install Playwright Browsers
+#         run: npx playwright install --with-deps chromium
+# 
+#       - name: 🗄️ Setup Prisma
+#         env:
+#           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+#         run: pnpm exec prisma generate
+# 
+#       - name: 🕵️‍♂️ Run Retailer 1
+#         env:
+#           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+#           CATEGORY: ${{ matrix.category }}
+#           SCRIPT_PATH: ${{ secrets.RETAILER_1_SCRIPT }}
+#         run: pnpm exec tsx $SCRIPT_PATH
+# 
+#   # ==========================================
+#   # 3. NOTIFICATIONS
+#   # ==========================================
+#   notify:
+#     needs: [get-categories, import-new-products]
+#     if: always()
+#     runs-on: ubuntu-latest
+# 
+#     steps:
+#       - name: ✅ Success notification
+#         if: needs.import-new-products.result == 'success'
+#         env:
+#           CATEGORIES: ${{ needs.get-categories.outputs.categories }}
+#           URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+#           WEBHOOK: ${{ secrets.WEBHOOK }}
+#         run: |
+#           jq -n \
+#             --arg cat "$CATEGORIES" \
+#             --arg url "$URL" \
+#             --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+#             '{
+#               embeds: [{
+#                 title: "✅ New Products Imported",
+#                 description: "The 3-day discovery scraper completed successfully.",
+#                 color: 5763719,
+#                 fields: [
+#                   {name: "Status", value: "🟢 All DB categories processed", inline: false},
+#                   {name: "Categories Checked", value: $cat, inline: false},
+#                   {name: "Run Details", value: $url, inline: false}
+#                 ],
+#                 timestamp: $date
+#               }]
+#             }' | curl -s -H "Content-Type: application/json" -d @- $WEBHOOK
+# 
+#       - name: ❌ Failure notification
+#         if: needs.import-new-products.result != 'success'
+#         env:
+#           URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+#           WEBHOOK: ${{ secrets.WEBHOOK }}
+#         run: |
+#           jq -n \
+#             --arg url "$URL" \
+#             --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+#             '{
+#               embeds: [{
+#                 title: "❌ Importer Failed",
+#                 description: "The New Products Importer job failed.",
+#                 color: 15548997,
+#                 fields: [
+#                   {name: "Status", value: "🔴 Failure detected", inline: false},
+#                   {name: "Logs", value: $url, inline: false}
+#                 ],
+#                 timestamp: $date
+#               }]
+#             }' | curl -s -H "Content-Type: application/json" -d @- $WEBHOOK
