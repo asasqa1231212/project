@@ -1,0 +1,59 @@
+name: crowdin-sync
+
+on:
+  schedule:
+    # Run every 24 hours at midnight UTC
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.MAIN_REPO }}
+          token: ${{ secrets.MY_PAT }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Upload sources to Crowdin
+        env:
+          CROWDIN_PROJECT_ID: ${{ secrets.CROWDIN_PROJECT_ID }}
+          CROWDIN_API_TOKEN: ${{ secrets.CROWDIN_API_TOKEN }}
+        run: pnpm exec tsx scripts/crowdin-sync.ts upload
+        continue-on-error: true
+
+      - name: Download translations from Crowdin
+        env:
+          CROWDIN_PROJECT_ID: ${{ secrets.CROWDIN_PROJECT_ID }}
+          CROWDIN_API_TOKEN: ${{ secrets.CROWDIN_API_TOKEN }}
+        run: pnpm exec tsx scripts/crowdin-sync.ts download
+
+      - name: Commit and push translations only
+        run: |
+          # Only stage translation files
+          git add src/i18n/messages/
+          
+          # Check if there are changes
+          if git diff --staged --quiet; then
+            echo "No translation changes to commit"
+            exit 0
+          fi
+          
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(i18n): sync translations from Crowdin [skip ci]"
+          git push
