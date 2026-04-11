@@ -1,4 +1,4 @@
-name: Build Camoufox Package
+name: Build Camoufox Offline Package
 
 on:
   workflow_dispatch:
@@ -18,27 +18,38 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install camoufox playwright requests
+          pip install camoufox playwright
 
-      - name: Install Chromium (required by Camoufox)
+      - name: Install Chromium
         run: |
           python -m playwright install --with-deps chromium
 
-      - name: Create package folder
+      - name: Create bundle folder
         run: |
-          mkdir camoufox_package
+          mkdir -p bundle
 
-      - name: Copy Camoufox install
+      - name: Locate Python site-packages
+        run: |
+          python -c "import site; print(site.getsitepackages()[0])"
+
+      - name: Copy Camoufox package
         run: |
           SITE=$(python -c "import site; print(site.getsitepackages()[0])")
-          cp -r $SITE/camoufox camoufox_package/
+          cp -r $SITE/camoufox bundle/
 
-      - name: Create tar archive
+      - name: Copy Playwright browsers
         run: |
-          tar -czf camoufox.tar.gz camoufox_package
+          mkdir -p bundle/playwright
+          cp -r ~/.cache/ms-playwright bundle/playwright || true
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - name: Create archive
+        run: |
+          tar -czf camoufox.tar.gz bundle
+
+      - name: Upload Release (IMPORTANT)
+        uses: softprops/action-gh-release@v2
         with:
-          name: camoufox
-          path: camoufox.tar.gz
+          tag_name: camoufox-v1
+          files: camoufox.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
