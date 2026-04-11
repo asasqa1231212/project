@@ -1,5 +1,8 @@
 name: Build Camoufox Offline Package
 
+permissions:
+  contents: write
+
 on:
   workflow_dispatch:
 

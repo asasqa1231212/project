@@ -1,0 +1,49 @@
+name: Build Camoufox Cache
+
+on:
+  workflow_dispatch: # manual only (recommended)
+
+jobs:
+  build-cache:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # ✅ Enable Git LFS (REQUIRED for big files)
+      - name: Setup Git LFS
+        run: |
+          git lfs install
+          git lfs track "camoufox-cache/**"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install camoufox
+        run: |
+          pip install camoufox
+
+      - name: Fetch camoufox binaries
+        run: |
+          camoufox fetch
+
+      - name: Copy cache into repo
+        run: |
+          rm -rf camoufox-cache
+          mkdir -p camoufox-cache
+          cp -r ~/.cache/camoufox/* camoufox-cache/
+
+      - name: Commit and push cache
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+
+          git add .gitattributes
+          git add camoufox-cache
+
+          git commit -m "Update camoufox cache" || echo "No changes"
+
+          git push
