@@ -1,0 +1,44 @@
+name: Build Camoufox Package
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install camoufox playwright requests
+
+      - name: Install Chromium (required by Camoufox)
+        run: |
+          python -m playwright install --with-deps chromium
+
+      - name: Create package folder
+        run: |
+          mkdir camoufox_package
+
+      - name: Copy Camoufox install
+        run: |
+          SITE=$(python -c "import site; print(site.getsitepackages()[0])")
+          cp -r $SITE/camoufox camoufox_package/
+
+      - name: Create tar archive
+        run: |
+          tar -czf camoufox.tar.gz camoufox_package
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: camoufox
+          path: camoufox.tar.gz
