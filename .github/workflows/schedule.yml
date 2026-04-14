@@ -38,7 +38,6 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
           pnpm exec prisma generate
-          pnpm exec prisma migrate deploy
 
       - name: Get categories
         id: get
