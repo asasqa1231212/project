@@ -90,20 +90,17 @@ jobs:
         working-directory: project
         run: pnpm exec prisma generate
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install Botasaurus + API server
-        run: pip install botasaurus fastapi uvicorn
+      - name: Install Python + Botasaurus
+        run: |
+          apt-get update && apt-get install -y python3-pip
+          pip3 install botasaurus fastapi uvicorn
 
       - name: Start CF Bypass API server
         working-directory: project
         env:
           CF_BACKEND: botasaurus
         run: |
-          python cf_bypass_api.py &
+          python3 cf_bypass_api.py &
           for i in $(seq 1 30); do
             if curl -s http://127.0.0.1:8000/health | grep -q "ok"; then
               echo "✅ CF Bypass API is ready"
