@@ -1,4 +1,3 @@
-
 name: products-scraping
 
 on:
@@ -91,6 +90,29 @@ jobs:
         working-directory: project
         run: pnpm exec prisma generate
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Botasaurus + API server
+        run: pip install botasaurus fastapi uvicorn
+
+      - name: Start CF Bypass API server
+        working-directory: project
+        env:
+          CF_BACKEND: botasaurus
+        run: |
+          python cf_bypass_api.py &
+          for i in $(seq 1 30); do
+            if curl -s http://127.0.0.1:8000/health | grep -q "ok"; then
+              echo "✅ CF Bypass API is ready"
+              break
+            fi
+            echo "⏳ Waiting for CF Bypass API... ($i/30)"
+            sleep 2
+          done
+
       - name: Run scraper
         working-directory: project
         env:
@@ -98,6 +120,7 @@ jobs:
           CATEGORY: ${{ matrix.category }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           NODE_ENV: production
+          CF_BACKEND: botasaurus
         run: pnpm -s scrape:update-prices
 
   notify:
