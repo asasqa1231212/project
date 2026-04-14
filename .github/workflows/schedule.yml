@@ -1,59 +1,3 @@
-name: products-scraping
-
-on:
-  schedule:
-    - cron: "0 * * * *"
-  workflow_dispatch:
-
-jobs:
-  get-categories:
-    runs-on: ubuntu-latest
-    outputs:
-      categories: ${{ steps.get.outputs.categories }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ secrets.MAIN_REPO }}
-          token: ${{ secrets.MY_PAT }}
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: "pnpm"
-
-      - name: Verify pnpm
-        run: pnpm -v
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Setup Prisma
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: |
-          pnpm exec prisma generate
-
-      - name: Get categories
-        id: get
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: |
-          categories=$(pnpm exec tsx scripts/get-categories-from-db.ts)
-
-          echo "Raw categories: $categories"
-
-          if [ -z "$categories" ] || [ "$categories" = "null" ]; then
-            categories="[]"
-          fi
-
-          echo "categories=$categories" >> $GITHUB_OUTPUT
-
   run:
     needs: get-categories
     if: ${{ needs.get-categories.outputs.categories != '[]' }}
@@ -67,6 +11,17 @@ jobs:
 
     container:
       image: mcr.microsoft.com/playwright:v1.58.1-jammy
+
+    services:
+      flaresolverr:
+        image: ghcr.io/flaresolverr/flaresolverr:latest
+        ports:
+          - 8191:8191
+        options: >-
+          --health-cmd "curl -s http://localhost:8191/health"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Checkout repository
@@ -89,26 +44,6 @@ jobs:
         working-directory: project
         run: pnpm exec prisma generate
 
-      - name: Install Python + Botasaurus
-        run: |
-          apt-get update && apt-get install -y python3-pip
-          pip3 install botasaurus fastapi uvicorn
-
-      - name: Start CF Bypass API server
-        working-directory: project
-        env:
-          CF_BACKEND: botasaurus
-        run: |
-          python3 cf_bypass_api.py &
-          for i in $(seq 1 30); do
-            if curl -s http://127.0.0.1:8000/health | grep -q "ok"; then
-              echo "✅ CF Bypass API is ready"
-              break
-            fi
-            echo "⏳ Waiting for CF Bypass API... ($i/30)"
-            sleep 2
-          done
-
       - name: Run scraper
         working-directory: project
         env:
@@ -116,58 +51,6 @@ jobs:
           CATEGORY: ${{ matrix.category }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           NODE_ENV: production
-          CF_BACKEND: botasaurus
+          CF_BACKEND: flaresolverr
+          CF_BYPASS_API_URL: http://flaresolverr:8191
         run: pnpm -s scrape:update-prices
-
-  notify:
-    needs: [get-categories, run]
-    if: always()
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Success notification
-        if: needs.run.result == 'success'
-        env:
-          CATEGORIES: ${{ needs.get-categories.outputs.categories }}
-          URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          WEBHOOK: ${{ secrets.WEBHOOK }}
-        run: |
-          jq -n \
-            --arg cat "$CATEGORIES" \
-            --arg url "$URL" \
-            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{
-              embeds: [{
-                title: "✅ Tracker Updated",
-                description: "Scraping completed successfully.",
-                color: 5763719,
-                fields: [
-                  {name: "Status", value: "🟢 All categories processed", inline: false},
-                  {name: "Categories", value: $cat, inline: false},
-                  {name: "Run", value: $url, inline: false}
-                ],
-                timestamp: $date
-              }]
-            }' | curl -s -H "Content-Type: application/json" -d @- $WEBHOOK
-
-      - name: Failure notification
-        if: needs.run.result != 'success'
-        env:
-          URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          WEBHOOK: ${{ secrets.WEBHOOK }}
-        run: |
-          jq -n \
-            --arg url "$URL" \
-            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{
-              embeds: [{
-                title: "❌ Tracker Failed",
-                description: "Some scraping jobs failed.",
-                color: 15548997,
-                fields: [
-                  {name: "Status", value: "🔴 Failure detected", inline: false},
-                  {name: "Logs", value: $url, inline: false}
-                ],
-                timestamp: $date
-              }]
-            }' | curl -s -H "Content-Type: application/json" -d @- $WEBHOOK
