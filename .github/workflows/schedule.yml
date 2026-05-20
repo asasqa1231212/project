@@ -1,4 +1,4 @@
-name: products-scraping
+  name: products-scraping
 
 on:
   schedule:
@@ -65,7 +65,7 @@ jobs:
         category: ${{ fromJson(needs.get-categories.outputs.categories) }}
 
     container:
-      image: mcr.microsoft.com/playwright:v1.58.1-jammy
+      image: mcr.microsoft.com/playwright:v1.59.1-jammy
 
     services:
       flaresolverr:
