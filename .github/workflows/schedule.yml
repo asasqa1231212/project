@@ -1,86 +1,215 @@
-name: Schedule Scraper
+name: products-scraping
 
 on:
   schedule:
-    - cron: "0 * * * *" # every hour
+    - cron: "0 * * * *"
   workflow_dispatch:
 
 jobs:
-  run:
+  get-categories:
     runs-on: ubuntu-latest
+
+    outputs:
+      categories: ${{ steps.get.outputs.categories }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.MAIN_REPO }}
+          token: ${{ secrets.MY_PAT }}
+          path: project
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: project/pnpm-lock.yaml
+
+      - name: Verify pnpm
+        run: pnpm -v
+
+      - name: Install dependencies
+        working-directory: project
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        working-directory: project
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: pnpm exec prisma generate
+
+      - name: Get categories
+        id: get
+        working-directory: project
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        shell: bash
+        run: |
+          categories=$(pnpm exec tsx scripts/get-categories-from-db.ts)
+
+          echo "Raw categories:"
+          echo "$categories"
+
+          if [ -z "$categories" ] || [ "$categories" = "null" ]; then
+            categories="[]"
+          fi
+
+          echo "categories<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$categories" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+  run:
+    needs: get-categories
+    if: ${{ needs.get-categories.outputs.categories != '[]' }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        category: ${{ fromJson(needs.get-categories.outputs.categories) }}
+
+    container:
+      image: mcr.microsoft.com/playwright:v1.59.1-jammy
+
+    services:
+      flaresolverr:
+        image: ghcr.io/flaresolverr/flaresolverr:latest
+        ports:
+          - 8191:8191
+        options: >-
+          --health-cmd="curl -f http://localhost:8191/health || exit 1"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.MAIN_REPO }}
+          token: ${{ secrets.MY_PAT }}
+          path: project
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Activate pnpm
+        run: corepack prepare pnpm@9 --activate
+
+      - name: Verify pnpm
+        run: pnpm -v
+
+      - name: Install dependencies
+        working-directory: project
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        working-directory: project
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: pnpm exec prisma generate
+
+      - name: Install Playwright browsers
+        working-directory: project
+        run: pnpm exec playwright install --with-deps chromium
 
       - name: Run scraper
         working-directory: project
         env:
           ENABLE_SCRAPING: "true"
+          CATEGORY: ${{ matrix.category }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           NODE_ENV: production
           CF_BACKEND: flaresolverr
           CF_BYPASS_API_URL: http://flaresolverr:8191
-        run: |
-          pnpm -s scrape:update-prices
+        run: pnpm -s scrape:update-prices
 
   notify:
-    needs: run
+    needs:
+      - get-categories
+      - run
+
     if: always()
     runs-on: ubuntu-latest
 
     steps:
       - name: Success notification
-        if: needs.run.result == 'success'
+        if: ${{ needs.run.result == 'success' || needs.run.result == 'skipped' }}
         env:
+          CATEGORIES: ${{ needs.get-categories.outputs.categories }}
           URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           WEBHOOK: ${{ secrets.WEBHOOK }}
         run: |
           jq -n \
-          --arg url "$URL" \
-          --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-          '{
-            embeds: [{
-              title: "✅ Tracker Updated",
-              description: "Scraping completed successfully.",
-              color: 5763719,
-              fields: [
-                {
-                  name: "Status",
-                  value: "All categories processed",
-                  inline: false
-                },
-                {
-                  name: "Run",
-                  value: $url,
-                  inline: false
-                }
-              ],
-              timestamp: $date
-            }]
-          }' | curl -s -H "Content-Type: application/json" -d @- $WEBHOOK
+            --arg cat "$CATEGORIES" \
+            --arg url "$URL" \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{
+              embeds: [{
+                title: "✅ Tracker Updated",
+                description: "Scraping completed successfully.",
+                color: 5763719,
+                fields: [
+                  {
+                    name: "Status",
+                    value: "🟢 All categories processed",
+                    inline: false
+                  },
+                  {
+                    name: "Categories",
+                    value: $cat,
+                    inline: false
+                  },
+                  {
+                    name: "Run",
+                    value: $url,
+                    inline: false
+                  }
+                ],
+                timestamp: $date
+              }]
+            }' | curl -s \
+              -H "Content-Type: application/json" \
+              -d @- \
+              "$WEBHOOK"
 
       - name: Failure notification
-        if: needs.run.result == 'failure'
+        if: ${{ needs.run.result == 'failure' }}
         env:
           URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           WEBHOOK: ${{ secrets.WEBHOOK }}
         run: |
           jq -n \
-          --arg url "$URL" \
-          --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-          '{
-            embeds: [{
-              title: "❌ Tracker Failed",
-              description: "Some scraping jobs failed.",
-              color: 15548997,
-              fields: [
-                {
-                  name: "Logs",
-                  value: $url,
-                  inline: false
-                }
-              ],
-              timestamp: $date
-            }]
-          }' | curl -s -H "Content-Type: application/json" -d @- $WEBHOOK
+            --arg url "$URL" \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{
+              embeds: [{
+                title: "❌ Tracker Failed",
+                description: "Some scraping jobs failed.",
+                color: 15548997,
+                fields: [
+                  {
+                    name: "Status",
+                    value: "🔴 Failure detected",
+                    inline: false
+                  },
+                  {
+                    name: "Logs",
+                    value: $url,
+                    inline: false
+                  }
+                ],
+                timestamp: $date
+              }]
+            }' | curl -s \
+              -H "Content-Type: application/json" \
+              -d @- \
+              "$WEBHOOK"
