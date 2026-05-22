@@ -1,64 +1,64 @@
+name: Schedule Scraper
+
+on:
+  schedule:
+    - cron: "0 * * * *" # every hour
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Run scraper
         working-directory: project
         env:
           ENABLE_SCRAPING: "true"
-          CATEGORY: ${{ matrix.category }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           NODE_ENV: production
           CF_BACKEND: flaresolverr
           CF_BYPASS_API_URL: http://flaresolverr:8191
-        run: pnpm -s scrape:update-prices
+        run: |
+          pnpm -s scrape:update-prices
 
   notify:
-    needs: [get-categories, run]
+    needs: run
     if: always()
     runs-on: ubuntu-latest
 
     steps:
-      - name: Skipped notification
-        if: needs.run.result == 'skipped'
-        env:
-          WEBHOOK: ${{ secrets.WEBHOOK }}
-        run: |
-          jq -n \
-            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{
-              embeds: [{
-                title: "⏭️ Scraping Skipped",
-                description: "No categories found in database.",
-                color: 16766720,
-                fields: [
-                  {name: "Status", value: "🟡 No categories to scrape", inline: false}
-                ],
-                timestamp: $date
-              }]
-            }' | curl -s -H "Content-Type: application/json" -d @- $WEBHOOK
-
       - name: Success notification
         if: needs.run.result == 'success'
         env:
-          CATEGORIES: ${{ needs.get-categories.outputs.categories }}
           URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           WEBHOOK: ${{ secrets.WEBHOOK }}
         run: |
           jq -n \
-            --arg cat "$CATEGORIES" \
-            --arg url "$URL" \
-            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{
-              embeds: [{
-                title: "✅ Tracker Updated",
-                description: "Scraping completed successfully.",
-                color: 5763719,
-                fields: [
-                  {name: "Status", value: "🟢 All categories processed", inline: false},
-                  {name: "Categories", value: $cat, inline: false},
-                  {name: "Run", value: $url, inline: false}
-                ],
-                timestamp: $date
-              }]
-            }' | curl -s -H "Content-Type: application/json" -d @- $WEBHOOK
+          --arg url "$URL" \
+          --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          '{
+            embeds: [{
+              title: "✅ Tracker Updated",
+              description: "Scraping completed successfully.",
+              color: 5763719,
+              fields: [
+                {
+                  name: "Status",
+                  value: "All categories processed",
+                  inline: false
+                },
+                {
+                  name: "Run",
+                  value: $url,
+                  inline: false
+                }
+              ],
+              timestamp: $date
+            }]
+          }' | curl -s -H "Content-Type: application/json" -d @- $WEBHOOK
 
       - name: Failure notification
         if: needs.run.result == 'failure'
@@ -67,36 +67,20 @@
           WEBHOOK: ${{ secrets.WEBHOOK }}
         run: |
           jq -n \
-            --arg url "$URL" \
-            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{
-              embeds: [{
-                title: "❌ Tracker Failed",
-                description: "Some scraping jobs failed.",
-                color: 15548997,
-                fields: [
-                  {name: "Status", value: "🔴 Failure detected", inline: false},
-                  {name: "Logs", value: $url, inline: false}
-                ],
-                timestamp: $date
-              }]
-            }' | curl -s -H "Content-Type: application/json" -d @- $WEBHOOK
-
-      - name: Cancelled notification
-        if: needs.run.result == 'cancelled'
-        env:
-          WEBHOOK: ${{ secrets.WEBHOOK }}
-        run: |
-          jq -n \
-            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{
-              embeds: [{
-                title: "🛑 Scraping Cancelled",
-                description: "The workflow was cancelled.",
-                color: 10070709,
-                fields: [
-                  {name: "Status", value: "⚪ Cancelled", inline: false}
-                ],
-                timestamp: $date
-              }]
-            }' | curl -s -H "Content-Type: application/json" -d @- $WEBHOOK
+          --arg url "$URL" \
+          --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          '{
+            embeds: [{
+              title: "❌ Tracker Failed",
+              description: "Some scraping jobs failed.",
+              color: 15548997,
+              fields: [
+                {
+                  name: "Logs",
+                  value: $url,
+                  inline: false
+                }
+              ],
+              timestamp: $date
+            }]
+          }' | curl -s -H "Content-Type: application/json" -d @- $WEBHOOK
