@@ -1,0 +1,85 @@
+name: Validate Workflows
+
+on:
+  push:
+    paths:
+      - ".github/workflows/*.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install action-validator
+        run: npm install -g action-validator
+
+      - name: Validate all workflow files
+        run: |
+          errors=0
+          for file in .github/workflows/*.yml; do
+            echo "=== Validating: $file ==="
+            if action-validator "$file"; then
+              echo "  ✅ $file passed"
+            else
+              echo "  ❌ $file FAILED"
+              errors=$((errors + 1))
+            fi
+            echo ""
+          done
+          if [ "$errors" -gt 0 ]; then
+            echo "❌ $errors workflow file(s) have errors"
+            exit 1
+          fi
+          echo "✅ All workflow files valid"
+
+      - name: Check for hardcoded secrets
+        run: |
+          echo "=== Checking for hardcoded secrets ==="
+          errors=0
+          for file in .github/workflows/*.yml; do
+            while IFS= read -r line; do
+              if echo "$line" | grep -qP '(sk-[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{36}|AKIA[0-9A-Z]{16}|-----BEGIN.*PRIVATE KEY-----)'; then
+                echo "❌ $file: possible secret found"
+                errors=$((errors + 1))
+              fi
+            done < "$file"
+          done
+          if [ "$errors" -gt 0 ]; then
+            echo "❌ Hardcoded secrets detected!"
+            exit 1
+          fi
+          echo "✅ No hardcoded secrets found"
+
+      - name: Check action versions
+        run: |
+          echo "=== Checking action versions ==="
+          for file in .github/workflows/*.yml; do
+            grep -oP '[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+@v?\d+' "$file" 2>/dev/null | while IFS= read -r action; do
+              name="${action%@*}"
+              version="${action#*@}"
+              case "$name" in
+                actions/checkout|actions/setup-node|actions/cache|actions/upload-artifact)
+                  if [[ "$version" != v4* ]]; then
+                    echo "⚠️  $file: $name should use v4 (got $version)"
+                  fi
+                  ;;
+                actions/setup-python)
+                  if [[ "$version" != v5* ]]; then
+                    echo "⚠️  $file: $name should use v5 (got $version)"
+                  fi
+                  ;;
+              esac
+            done
+          done
