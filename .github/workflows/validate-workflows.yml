@@ -17,65 +17,29 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.MAIN_REPO }}
+          token: ${{ secrets.MY_PAT }}
+          path: project
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: project/package.json
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: pnpm
+          cache-dependency-path: project/pnpm-lock.yaml
 
-      - name: Validate YAML syntax
-        run: |
-          errors=0
-          for file in .github/workflows/*.yml; do
-            echo "=== Checking: $file ==="
-            if python3 -c "import yaml; yaml.safe_load(open('$file'))" 2>/dev/null; then
-              echo "  ✅ $file valid"
-            else
-              echo "  ❌ $file invalid YAML"
-              errors=$((errors + 1))
-            fi
-          done
-          if [ "$errors" -gt 0 ]; then exit 1; fi
-          echo "✅ All files valid YAML"
+      - name: Install dependencies
+        working-directory: project
+        run: pnpm install --frozen-lockfile
 
-      - name: Check workflow structure
-        run: |
-          errors=0
-          for file in .github/workflows/*.yml; do
-            name=$(python3 -c "import yaml; d=yaml.safe_load(open('$file')); print(d.get('name','') if d else '')")
-            jobs=$(python3 -c "import yaml; d=yaml.safe_load(open('$file')); print(len(d.get('jobs',{})) if d else 0)")
-            triggers=$(python3 -c "import yaml; d=yaml.safe_load(open('$file')); print(list(d.get('on',{}).keys()) if isinstance(d.get('on'), dict) else ['-']) if d else []")
-            if [ -z "$name" ]; then echo "❌ $file: missing name"; errors=$((errors + 1)); fi
-            if [ "$jobs" -eq 0 ]; then echo "❌ $file: no jobs"; errors=$((errors + 1)); fi
-          done
-          if [ "$errors" -gt 0 ]; then exit 1; fi
-          echo "✅ All workflows have required structure"
-
-      - name: Check for hardcoded secrets
-        run: |
-          errors=0
-          for file in .github/workflows/*.yml; do
-            if grep -qP '(sk-[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{36}|AKIA[0-9A-Z]{16}|-----BEGIN.*PRIVATE KEY-----)' "$file" 2>/dev/null; then
-              echo "❌ $file: possible secret found"
-              errors=$((errors + 1))
-            fi
-          done
-          if [ "$errors" -gt 0 ]; then exit 1; fi
-          echo "✅ No hardcoded secrets"
-
-      - name: Check action versions
-        run: |
-          for file in .github/workflows/*.yml; do
-            grep -oP '[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+@v?\d+' "$file" 2>/dev/null | while IFS= read -r action; do
-              name="${action%@*}"
-              version="${action#*@}"
-              case "$name" in
-                actions/checkout|actions/setup-node|actions/cache|actions/upload-artifact)
-                  if [[ "$version" != v4* ]]; then echo "⚠️  $file: $name should use v4"; fi ;;
-                actions/setup-python)
-                  if [[ "$version" != v5* ]]; then echo "⚠️  $file: $name should use v5"; fi ;;
-              esac
-            done
-          done
+      - name: Validate workflow files
+        working-directory: project
+        run: pnpm validate:actions
