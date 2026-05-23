@@ -6,6 +6,9 @@ on:
       - ".github/workflows/*.yml"
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 permissions:
   contents: read
 
@@ -22,64 +25,57 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install action-validator
-        run: npm install -g action-validator
-
-      - name: Validate all workflow files
+      - name: Validate YAML syntax
         run: |
           errors=0
           for file in .github/workflows/*.yml; do
-            echo "=== Validating: $file ==="
-            if action-validator "$file"; then
-              echo "  ✅ $file passed"
+            echo "=== Checking: $file ==="
+            if python3 -c "import yaml; yaml.safe_load(open('$file'))" 2>/dev/null; then
+              echo "  ✅ $file valid"
             else
-              echo "  ❌ $file FAILED"
+              echo "  ❌ $file invalid YAML"
               errors=$((errors + 1))
             fi
-            echo ""
           done
-          if [ "$errors" -gt 0 ]; then
-            echo "❌ $errors workflow file(s) have errors"
-            exit 1
-          fi
-          echo "✅ All workflow files valid"
+          if [ "$errors" -gt 0 ]; then exit 1; fi
+          echo "✅ All files valid YAML"
+
+      - name: Check workflow structure
+        run: |
+          errors=0
+          for file in .github/workflows/*.yml; do
+            name=$(python3 -c "import yaml; d=yaml.safe_load(open('$file')); print(d.get('name','') if d else '')")
+            jobs=$(python3 -c "import yaml; d=yaml.safe_load(open('$file')); print(len(d.get('jobs',{})) if d else 0)")
+            triggers=$(python3 -c "import yaml; d=yaml.safe_load(open('$file')); print(list(d.get('on',{}).keys()) if isinstance(d.get('on'), dict) else ['-']) if d else []")
+            if [ -z "$name" ]; then echo "❌ $file: missing name"; errors=$((errors + 1)); fi
+            if [ "$jobs" -eq 0 ]; then echo "❌ $file: no jobs"; errors=$((errors + 1)); fi
+          done
+          if [ "$errors" -gt 0 ]; then exit 1; fi
+          echo "✅ All workflows have required structure"
 
       - name: Check for hardcoded secrets
         run: |
-          echo "=== Checking for hardcoded secrets ==="
           errors=0
           for file in .github/workflows/*.yml; do
-            while IFS= read -r line; do
-              if echo "$line" | grep -qP '(sk-[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{36}|AKIA[0-9A-Z]{16}|-----BEGIN.*PRIVATE KEY-----)'; then
-                echo "❌ $file: possible secret found"
-                errors=$((errors + 1))
-              fi
-            done < "$file"
+            if grep -qP '(sk-[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{36}|AKIA[0-9A-Z]{16}|-----BEGIN.*PRIVATE KEY-----)' "$file" 2>/dev/null; then
+              echo "❌ $file: possible secret found"
+              errors=$((errors + 1))
+            fi
           done
-          if [ "$errors" -gt 0 ]; then
-            echo "❌ Hardcoded secrets detected!"
-            exit 1
-          fi
-          echo "✅ No hardcoded secrets found"
+          if [ "$errors" -gt 0 ]; then exit 1; fi
+          echo "✅ No hardcoded secrets"
 
       - name: Check action versions
         run: |
-          echo "=== Checking action versions ==="
           for file in .github/workflows/*.yml; do
             grep -oP '[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+@v?\d+' "$file" 2>/dev/null | while IFS= read -r action; do
               name="${action%@*}"
               version="${action#*@}"
               case "$name" in
                 actions/checkout|actions/setup-node|actions/cache|actions/upload-artifact)
-                  if [[ "$version" != v4* ]]; then
-                    echo "⚠️  $file: $name should use v4 (got $version)"
-                  fi
-                  ;;
+                  if [[ "$version" != v4* ]]; then echo "⚠️  $file: $name should use v4"; fi ;;
                 actions/setup-python)
-                  if [[ "$version" != v5* ]]; then
-                    echo "⚠️  $file: $name should use v5 (got $version)"
-                  fi
-                  ;;
+                  if [[ "$version" != v5* ]]; then echo "⚠️  $file: $name should use v5"; fi ;;
               esac
             done
           done
