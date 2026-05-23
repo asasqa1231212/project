@@ -78,7 +78,6 @@ jobs:
     needs: get-categories
     if: ${{ needs.get-categories.outputs.categories != '[]' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
 
     strategy:
       fail-fast: false
@@ -238,6 +237,7 @@ jobs:
               embeds: [{
                 title: "❌ Price Update Failed",
                 description: "Some scraping jobs failed.",
+                error: "Failure detected",
                 color: 15548997,
                 fields: [
                   { name: "Status", value: "🔴 Failure detected", inline: false },
