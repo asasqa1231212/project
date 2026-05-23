@@ -5,6 +5,17 @@ on:
     - cron: "0 * * * *"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PNPM_VERSION: "9"
+  NODE_VERSION: "20"
+
 jobs:
   get-categories:
     runs-on: ubuntu-latest
@@ -23,17 +34,14 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: ${{ env.PNPM_VERSION }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
           cache-dependency-path: project/pnpm-lock.yaml
-
-      - name: Verify pnpm
-        run: pnpm -v
 
       - name: Install dependencies
         working-directory: project
@@ -52,7 +60,7 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         shell: bash
         run: |
-          categories=$(pnpm exec tsx scripts/get-categories-from-db.ts)
+          categories=$(pnpm exec tsx scripts/get-categories-from-db.ts 2>/dev/null)
 
           echo "Raw categories:"
           echo "$categories"
@@ -61,14 +69,16 @@ jobs:
             categories="[]"
           fi
 
-          echo "categories<<EOF" >> "$GITHUB_OUTPUT"
+          delimiter=$(dd if=/dev/urandom bs=1 count=16 2>/dev/null | od -An -tx1 | tr -d ' \n')
+          echo "categories<<$delimiter" >> "$GITHUB_OUTPUT"
           echo "$categories" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          echo "$delimiter" >> "$GITHUB_OUTPUT"
 
   run:
     needs: get-categories
     if: ${{ needs.get-categories.outputs.categories != '[]' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     strategy:
       fail-fast: false
@@ -98,14 +108,17 @@ jobs:
           token: ${{ secrets.MY_PAT }}
           path: project
 
-      - name: Enable Corepack
-        run: corepack enable
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
 
-      - name: Activate pnpm
-        run: corepack prepare pnpm@9 --activate
-
-      - name: Verify pnpm
-        run: pnpm -v
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: project/pnpm-lock.yaml
 
       - name: Install dependencies
         working-directory: project
@@ -121,7 +134,20 @@ jobs:
         working-directory: project
         run: pnpm exec playwright install --with-deps chromium
 
+      - name: Wait for FlareSolverr
+        shell: bash
+        run: |
+          for i in $(seq 1 15); do
+            if curl -sf http://flaresolverr:8191/health > /dev/null 2>&1; then
+              echo "FlareSolverr ready"
+              break
+            fi
+            echo "Waiting for FlareSolverr... ($i/15)"
+            sleep 3
+          done
+
       - name: Run scraper
+        id: scrape
         working-directory: project
         env:
           ENABLE_SCRAPING: "true"
@@ -130,7 +156,27 @@ jobs:
           NODE_ENV: production
           CF_BACKEND: flaresolverr
           CF_BYPASS_API_URL: http://flaresolverr:8191
-        run: pnpm -s scrape:update-prices
+          TWO_CAPTCHA_KEY: ${{ secrets.TWO_CAPTCHA_KEY }}
+          PROXY_URL: ${{ secrets.PROXY_URL }}
+          CRON_KEY: ${{ secrets.CRON_KEY }}
+          APP_URL: ${{ secrets.APP_URL }}
+        continue-on-error: true
+        run: pnpm -s scrape:update-prices 2>&1 | tee "${{ runner.temp }}/scrape-output.log"
+
+      - name: Upload artifacts on failure
+        if: steps.scrape.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: scrape-report-${{ matrix.category }}-${{ github.run_id }}
+          path: |
+            project/reports/
+            ${{ runner.temp }}/scrape-output.log
+            project/browser_sessions/
+          retention-days: 7
+
+      - name: Fail step if scrape failed
+        if: steps.scrape.outcome == 'failure'
+        run: exit 1
 
   notify:
     needs:
@@ -141,75 +187,62 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Success notification
-        if: ${{ needs.run.result == 'success' || needs.run.result == 'skipped' }}
+      - name: Check run result
+        id: check
+        shell: bash
+        run: |
+          if [ "${{ needs.run.result }}" = "success" ] || [ "${{ needs.run.result }}" = "skipped" ]; then
+            echo "status=success" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=failure" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Send success notification
+        if: steps.check.outputs.status == 'success'
         env:
           CATEGORIES: ${{ needs.get-categories.outputs.categories }}
-          URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           WEBHOOK: ${{ secrets.WEBHOOK }}
+        shell: bash
         run: |
+          count=$(echo "$CATEGORIES" | jq '. | length')
           jq -n \
-            --arg cat "$CATEGORIES" \
-            --arg url "$URL" \
+            --arg count "$count" \
+            --arg url "$RUN_URL" \
             --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             '{
               embeds: [{
-                title: "✅ Tracker Updated",
+                title: "✅ Prices Updated",
                 description: "Scraping completed successfully.",
                 color: 5763719,
                 fields: [
-                  {
-                    name: "Status",
-                    value: "🟢 All categories processed",
-                    inline: false
-                  },
-                  {
-                    name: "Categories",
-                    value: $cat,
-                    inline: false
-                  },
-                  {
-                    name: "Run",
-                    value: $url,
-                    inline: false
-                  }
+                  { name: "Status", value: "🟢 All categories processed", inline: false },
+                  { name: "Categories", value: $count, inline: false },
+                  { name: "Run", value: $url, inline: false }
                 ],
                 timestamp: $date
               }]
-            }' | curl -s \
-              -H "Content-Type: application/json" \
-              -d @- \
-              "$WEBHOOK"
+            }' | curl -s -H "Content-Type: application/json" -d @- "$WEBHOOK"
 
-      - name: Failure notification
-        if: ${{ needs.run.result == 'failure' }}
+      - name: Send failure notification
+        if: steps.check.outputs.status == 'failure'
         env:
-          URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           WEBHOOK: ${{ secrets.WEBHOOK }}
+        shell: bash
         run: |
           jq -n \
-            --arg url "$URL" \
+            --arg url "$RUN_URL" \
             --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             '{
               embeds: [{
-                title: "❌ Tracker Failed",
+                title: "❌ Price Update Failed",
                 description: "Some scraping jobs failed.",
                 color: 15548997,
                 fields: [
-                  {
-                    name: "Status",
-                    value: "🔴 Failure detected",
-                    inline: false
-                  },
-                  {
-                    name: "Logs",
-                    value: $url,
-                    inline: false
-                  }
+                  { name: "Status", value: "🔴 Failure detected", inline: false },
+                  { name: "Logs", value: $url, inline: false }
                 ],
                 timestamp: $date
               }]
-            }' | curl -s \
-              -H "Content-Type: application/json" \
-              -d @- \
-              "$WEBHOOK"
+            }' | curl -s -H "Content-Type: application/json" -d @- "$WEBHOOK"
