@@ -13,8 +13,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PNPM_VERSION: "9"
-  NODE_VERSION: "20"
+  PNPM_VERSION: "10"
+  NODE_VERSION: "22"
 
 jobs:
   get-categories:
@@ -237,7 +237,6 @@ jobs:
               embeds: [{
                 title: "❌ Price Update Failed",
                 description: "Some scraping jobs failed.",
-                error: "Failure detected",
                 color: 15548997,
                 fields: [
                   { name: "Status", value: "🔴 Failure detected", inline: false },
