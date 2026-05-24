@@ -1,153 +1,3 @@
-name: products-scraping
-
-on:
-  schedule:
-    - cron: "0 * * * *"
-  workflow_dispatch:
-
-permissions:
-  contents: read
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  PNPM_VERSION: "10"
-  NODE_VERSION: "22"
-
-jobs:
-  get-categories:
-    runs-on: ubuntu-latest
-
-    outputs:
-      categories: ${{ steps.get.outputs.categories }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ secrets.MAIN_REPO }}
-          token: ${{ secrets.MY_PAT }}
-          path: project
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-          cache-dependency-path: project/pnpm-lock.yaml
-
-      - name: Install dependencies
-        working-directory: project
-        run: pnpm install --frozen-lockfile
-
-      - name: Generate Prisma client
-        working-directory: project
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: pnpm exec prisma generate
-
-      - name: Get categories
-        id: get
-        working-directory: project
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        shell: bash
-        run: |
-          categories=$(pnpm exec tsx scripts/get-categories-from-db.ts 2>/dev/null)
-
-          echo "Raw categories:"
-          echo "$categories"
-
-          if [ -z "$categories" ] || [ "$categories" = "null" ]; then
-            categories="[]"
-          fi
-
-          delimiter=$(dd if=/dev/urandom bs=1 count=16 2>/dev/null | od -An -tx1 | tr -d ' \n')
-          echo "categories<<$delimiter" >> "$GITHUB_OUTPUT"
-          echo "$categories" >> "$GITHUB_OUTPUT"
-          echo "$delimiter" >> "$GITHUB_OUTPUT"
-
-  run:
-    needs: get-categories
-    if: ${{ needs.get-categories.outputs.categories != '[]' }}
-    runs-on: ubuntu-latest
-
-    strategy:
-      fail-fast: false
-      max-parallel: 4
-      matrix:
-        category: ${{ fromJson(needs.get-categories.outputs.categories) }}
-
-    container:
-      image: mcr.microsoft.com/playwright:v1.59.1-jammy
-
-    services:
-      flaresolverr:
-        image: ghcr.io/flaresolverr/flaresolverr:latest
-        ports:
-          - 8191:8191
-        options: >-
-          --health-cmd="curl -f http://localhost:8191/health || exit 1"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=10
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ secrets.MAIN_REPO }}
-          token: ${{ secrets.MY_PAT }}
-          path: project
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-          cache-dependency-path: project/pnpm-lock.yaml
-
-      - name: Install dependencies
-        working-directory: project
-        run: pnpm install --frozen-lockfile
-
-      - name: Generate Prisma client
-        working-directory: project
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: pnpm exec prisma generate
-
-      - name: Install Playwright browsers
-        working-directory: project
-        run: pnpm exec playwright install --with-deps chromium
-
-      - name: Wait for FlareSolverr
-        shell: bash
-        run: |
-          for i in $(seq 1 15); do
-            if curl -sf http://flaresolverr:8191/health > /dev/null 2>&1; then
-              echo "FlareSolverr ready"
-              break
-            fi
-            echo "Waiting for FlareSolverr... ($i/15)"
-            sleep 3
-          done
-
-      - name: Run scraper
-        id: scrape
         working-directory: project
         env:
           ENABLE_SCRAPING: "true"
@@ -158,6 +8,16 @@ jobs:
           CF_BYPASS_API_URL: http://flaresolverr:8191
           TWO_CAPTCHA_KEY: ${{ secrets.TWO_CAPTCHA_KEY }}
           PROXY_URL: ${{ secrets.PROXY_URL }}
+          PROXY_URL_1: ${{ secrets.PROXY_URL_1 }}
+          PROXY_URL_2: ${{ secrets.PROXY_URL_2 }}
+          PROXY_URL_3: ${{ secrets.PROXY_URL_3 }}
+          PROXY_URL_4: ${{ secrets.PROXY_URL_4 }}
+          PROXY_URL_5: ${{ secrets.PROXY_URL_5 }}
+          PROXY_URL_6: ${{ secrets.PROXY_URL_6 }}
+          PROXY_URL_7: ${{ secrets.PROXY_URL_7 }}
+          PROXY_URL_8: ${{ secrets.PROXY_URL_8 }}
+          PROXY_URL_9: ${{ secrets.PROXY_URL_9 }}
+          PROXY_URL_10: ${{ secrets.PROXY_URL_10 }}
           CRON_KEY: ${{ secrets.CRON_KEY }}
           APP_URL: ${{ secrets.APP_URL }}
         continue-on-error: true
@@ -186,62 +46,77 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check run result
-        id: check
+      - name: Collect results
+        id: collect
         shell: bash
         run: |
-          if [ "${{ needs.run.result }}" = "success" ] || [ "${{ needs.run.result }}" = "skipped" ]; then
-            echo "status=success" >> "$GITHUB_OUTPUT"
+          # Determine overall status
+          RUN_RESULT="${{ needs.run.result }}"
+
+          if [ "$RUN_RESULT" = "success" ]; then
+            STATUS_EMOJI="✅"
+            STATUS_TEXT="All categories processed"
+            COLOR=5763719
+          elif [ "$RUN_RESULT" = "skipped" ]; then
+            STATUS_EMOJI="⏭️"
+            STATUS_TEXT="Skipped (no categories)"
+            COLOR=16763904
+          elif [ "$RUN_RESULT" = "cancelled" ]; then
+            STATUS_EMOJI="❌"
+            STATUS_TEXT="Cancelled"
+            COLOR=15548997
           else
-            echo "status=failure" >> "$GITHUB_OUTPUT"
+            STATUS_EMOJI="⚠️"
+            STATUS_TEXT="Some categories failed"
+            COLOR=16744448
           fi
 
-      - name: Send success notification
-        if: steps.check.outputs.status == 'success'
-        env:
-          CATEGORIES: ${{ needs.get-categories.outputs.categories }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          WEBHOOK: ${{ secrets.WEBHOOK }}
-        shell: bash
-        run: |
-          count=$(echo "$CATEGORIES" | jq '. | length')
-          jq -n \
-            --arg count "$count" \
-            --arg url "$RUN_URL" \
-            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{
-              embeds: [{
-                title: "✅ Prices Updated",
-                description: "Scraping completed successfully.",
-                color: 5763719,
-                fields: [
-                  { name: "Status", value: "🟢 All categories processed", inline: false },
-                  { name: "Categories", value: $count, inline: false },
-                  { name: "Run", value: $url, inline: false }
-                ],
-                timestamp: $date
-              }]
-            }' | curl -s -H "Content-Type: application/json" -d @- "$WEBHOOK"
+          CATEGORIES_RAW='${{ needs.get-categories.outputs.categories }}'
+          CATEGORY_COUNT=$(echo "$CATEGORIES_RAW" | jq '. | length' 2>/dev/null || echo "0")
 
-      - name: Send failure notification
-        if: steps.check.outputs.status == 'failure'
+          echo "status_emoji=$STATUS_EMOJI" >> "$GITHUB_OUTPUT"
+          echo "status_text=$STATUS_TEXT" >> "$GITHUB_OUTPUT"
+          echo "color=$COLOR" >> "$GITHUB_OUTPUT"
+          echo "category_count=$CATEGORY_COUNT" >> "$GITHUB_OUTPUT"
+
+      - name: Send notification
         env:
+          STATUS_EMOJI: ${{ steps.collect.outputs.status_emoji }}
+          STATUS_TEXT: ${{ steps.collect.outputs.status_text }}
+          COLOR: ${{ steps.collect.outputs.color }}
+          CATEGORY_COUNT: ${{ steps.collect.outputs.category_count }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_NUMBER: ${{ github.run_number }}
+          ACTOR: ${{ github.triggering_actor }}
           WEBHOOK: ${{ secrets.WEBHOOK }}
+          REPO: ${{ github.repository }}
         shell: bash
         run: |
           jq -n \
+            --arg emoji "$STATUS_EMOJI" \
+            --arg status "$STATUS_TEXT" \
+            --argjson color "$COLOR" \
+            --arg count "$CATEGORY_COUNT" \
             --arg url "$RUN_URL" \
+            --arg run_id "$RUN_ID" \
+            --arg run_number "$RUN_NUMBER" \
+            --arg actor "$ACTOR" \
+            --arg repo "$REPO" \
             --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             '{
               embeds: [{
-                title: "❌ Price Update Failed",
-                description: "Some scraping jobs failed.",
-                color: 15548997,
+                title: ($emoji + " Price Update " + (if $emoji == "✅" then "Succeeded" else if $emoji == "⚠️" then "Partial" else "Failed" end end)),
+                color: $color,
                 fields: [
-                  { name: "Status", value: "🔴 Failure detected", inline: false },
-                  { name: "Logs", value: $url, inline: false }
+                  { name: "Status", value: $status, inline: false },
+                  { name: "Categories", value: $count, inline: true },
+                  { name: "Run", value: ("#" + $run_number + " (ID: " + $run_id + ")"), inline: true },
+                  { name: "Repository", value: $repo, inline: true },
+                  { name: "Triggered by", value: $actor, inline: true },
+                  { name: "Actions URL", value: $url, inline: false }
                 ],
-                timestamp: $date
+                timestamp: $date,
+                footer: { text: "MaPrice Scraper" }
               }]
             }' | curl -s -H "Content-Type: application/json" -d @- "$WEBHOOK"
