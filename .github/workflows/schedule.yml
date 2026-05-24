@@ -1,3 +1,144 @@
+name: products-scraping
+
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  PNPM_VERSION: "10"
+  NODE_VERSION: "22"
+
+jobs:
+  get-categories:
+    runs-on: ubuntu-latest
+    outputs:
+      categories: ${{ steps.get.outputs.categories }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.MAIN_REPO }}
+          token: ${{ secrets.MY_PAT }}
+          path: project
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: project/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: project
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        working-directory: project
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: pnpm exec prisma generate
+
+      - name: Get categories
+        id: get
+        working-directory: project
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        shell: bash
+        run: |
+          categories=$(pnpm exec tsx scripts/get-categories-from-db.ts 2>/dev/null)
+          echo "Raw categories:"
+          echo "$categories"
+          if [ -z "$categories" ] || [ "$categories" = "null" ]; then
+            categories="[]"
+          fi
+          delimiter=$(dd if=/dev/urandom bs=1 count=16 2>/dev/null | od -An -tx1 | tr -d ' \n')
+          echo "categories<<$delimiter" >> "$GITHUB_OUTPUT"
+          echo "$categories" >> "$GITHUB_OUTPUT"
+          echo "$delimiter" >> "$GITHUB_OUTPUT"
+
+  run:
+    needs: get-categories
+    if: ${{ needs.get-categories.outputs.categories != '[]' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        category: ${{ fromJson(needs.get-categories.outputs.categories) }}
+    container:
+      image: mcr.microsoft.com/playwright:v1.59.1-jammy
+    services:
+      flaresolverr:
+        image: ghcr.io/flaresolverr/flaresolverr:latest
+        ports:
+          - 8191:8191
+        options: >-
+          --health-cmd="curl -f http://localhost:8191/health || exit 1"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.MAIN_REPO }}
+          token: ${{ secrets.MY_PAT }}
+          path: project
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: project/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: project
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        working-directory: project
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: pnpm exec prisma generate
+
+      - name: Install Playwright browsers
+        working-directory: project
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Wait for FlareSolverr
+        shell: bash
+        run: |
+          for i in $(seq 1 15); do
+            if curl -sf http://flaresolverr:8191/health > /dev/null 2>&1; then
+              echo "FlareSolverr ready"
+              break
+            fi
+            echo "Waiting for FlareSolverr... ($i/15)"
+            sleep 3
+          done
+
+      - name: Run scraper
+        id: scrape
         working-directory: project
         env:
           ENABLE_SCRAPING: "true"
@@ -41,18 +182,14 @@
     needs:
       - get-categories
       - run
-
     if: always()
     runs-on: ubuntu-latest
-
     steps:
       - name: Collect results
         id: collect
         shell: bash
         run: |
-          # Determine overall status
           RUN_RESULT="${{ needs.run.result }}"
-
           if [ "$RUN_RESULT" = "success" ]; then
             STATUS_EMOJI="✅"
             STATUS_TEXT="All categories processed"
@@ -70,10 +207,8 @@
             STATUS_TEXT="Some categories failed"
             COLOR=16744448
           fi
-
           CATEGORIES_RAW='${{ needs.get-categories.outputs.categories }}'
           CATEGORY_COUNT=$(echo "$CATEGORIES_RAW" | jq '. | length' 2>/dev/null || echo "0")
-
           echo "status_emoji=$STATUS_EMOJI" >> "$GITHUB_OUTPUT"
           echo "status_text=$STATUS_TEXT" >> "$GITHUB_OUTPUT"
           echo "color=$COLOR" >> "$GITHUB_OUTPUT"
@@ -106,7 +241,7 @@
             --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             '{
               embeds: [{
-                title: ($emoji + " Price Update " + (if $emoji == "✅" then "Succeeded" else if $emoji == "⚠️" then "Partial" else "Failed" end end)),
+                title: ($emoji + " Price Update " + (if $emoji == "✅" then "Succeeded" elif $emoji == "⚠️" then "Partial" else "Failed" end)),
                 color: $color,
                 fields: [
                   { name: "Status", value: $status, inline: false },
@@ -117,6 +252,6 @@
                   { name: "Actions URL", value: $url, inline: false }
                 ],
                 timestamp: $date,
-                footer: { text: "MaPrice Scraper" }
+                footer: { text: "Scraper" }
               }]
             }' | curl -s -H "Content-Type: application/json" -d @- "$WEBHOOK"
