@@ -148,21 +148,10 @@ jobs:
           CF_BACKEND: flaresolverr
           CF_BYPASS_API_URL: http://flaresolverr:8191
           TWO_CAPTCHA_KEY: ${{ secrets.TWO_CAPTCHA_KEY }}
-          PROXY_URL: ${{ secrets.PROXY_URL }}
-          PROXY_URL_1: ${{ secrets.PROXY_URL_1 }}
-          PROXY_URL_2: ${{ secrets.PROXY_URL_2 }}
-          PROXY_URL_3: ${{ secrets.PROXY_URL_3 }}
-          PROXY_URL_4: ${{ secrets.PROXY_URL_4 }}
-          PROXY_URL_5: ${{ secrets.PROXY_URL_5 }}
-          PROXY_URL_6: ${{ secrets.PROXY_URL_6 }}
-          PROXY_URL_7: ${{ secrets.PROXY_URL_7 }}
-          PROXY_URL_8: ${{ secrets.PROXY_URL_8 }}
-          PROXY_URL_9: ${{ secrets.PROXY_URL_9 }}
-          PROXY_URL_10: ${{ secrets.PROXY_URL_10 }}
           CRON_KEY: ${{ secrets.CRON_KEY }}
           APP_URL: ${{ secrets.APP_URL }}
         continue-on-error: true
-        run: pnpm -s scrape:update-prices 2>&1 | tee "${{ runner.temp }}/scrape-output.log"
+        run: pnpm -s scrape:update-prices --report --max-failure-rate 50 2>&1 | tee scrape-output.log
 
       - name: Upload artifacts on failure
         if: steps.scrape.outcome == 'failure'
@@ -170,8 +159,8 @@ jobs:
         with:
           name: scrape-report-${{ matrix.category }}-${{ github.run_id }}
           path: |
-            project/reports
-            ${{ runner.temp }}/scrape-output.log
+            reports/
+            scrape-output.log
           retention-days: 7
 
       - name: Fail step if scrape failed
@@ -205,7 +194,7 @@ jobs:
           else
             STATUS_EMOJI="⚠️"
             STATUS_TEXT="Some categories failed"
-            COLOR=16744448
+            COLOR=16744480
           fi
           CATEGORIES_RAW='${{ needs.get-categories.outputs.categories }}'
           CATEGORY_COUNT=$(echo "$CATEGORIES_RAW" | jq '. | length' 2>/dev/null || echo "0")
