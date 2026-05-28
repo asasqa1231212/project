@@ -59,7 +59,12 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         shell: bash
         run: |
-          pairs=$(pnpm exec tsx scripts/get-retailer-category-pairs.ts 2>/dev/null)
+          pairs=$(pnpm exec tsx scripts/get-retailer-category-pairs.ts)
+          exit_code=$?
+          if [ $exit_code -ne 0 ]; then
+            echo "Script failed with exit code $exit_code"
+            exit $exit_code
+          fi
           echo "Raw pairs:"
           echo "$pairs"
           if [ -z "$pairs" ] || [ "$pairs" = "null" ]; then
@@ -118,6 +123,27 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
           cache-dependency-path: project/pnpm-lock.yaml
+
+      - name: Locate pnpm store
+        id: pnpm-store
+        working-directory: project
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-store-${{ hashFiles('project/pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-store-
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ hashFiles('project/pnpm-lock.yaml') }}
+          restore-keys: |
+            playwright-
 
       - name: Install dependencies
         working-directory: project
