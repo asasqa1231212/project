@@ -20,9 +20,6 @@ env:
 jobs:
   get-pairs:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ${{ github.workspace }}/project
     outputs:
       pairs: ${{ steps.get.outputs.pairs }}
     steps:
@@ -46,14 +43,17 @@ jobs:
           cache-dependency-path: project/pnpm-lock.yaml
 
       - name: Install dependencies
+        working-directory: project
         run: pnpm install --frozen-lockfile
 
       - name: Generate Prisma client
+        working-directory: project
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: pnpm exec prisma generate
 
       - name: Get retailer-category pairs
+        working-directory: project
         id: get
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
@@ -87,9 +87,6 @@ jobs:
       matrix:
         pair: ${{ fromJson(needs.get-pairs.outputs.pairs) }}
     timeout-minutes: 30
-    defaults:
-      run:
-        working-directory: ${{ github.workspace }}/project
     container:
       image: mcr.microsoft.com/playwright:v1.59.1-jammy
     services:
@@ -131,6 +128,7 @@ jobs:
 
       - name: Locate pnpm store
         id: pnpm-store
+        working-directory: project
         run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
 
       - name: Cache pnpm store
@@ -150,14 +148,17 @@ jobs:
             playwright-
 
       - name: Install dependencies
+        working-directory: project
         run: pnpm install --frozen-lockfile
 
       - name: Generate Prisma client
+        working-directory: project
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: pnpm exec prisma generate
 
       - name: Install Playwright browsers
+        working-directory: project
         run: pnpm exec playwright install --with-deps chromium
 
       - name: Wait for FlareSolverr
@@ -176,6 +177,7 @@ jobs:
 
       - name: Run scraper
         id: scrape
+        working-directory: project
         env:
           ENABLE_SCRAPING: "true"
           CATEGORY: ${{ steps.extract.outputs.category }}
