@@ -10,7 +10,7 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -86,7 +86,7 @@ jobs:
       max-parallel: 20
       matrix:
         pair: ${{ fromJson(needs.get-pairs.outputs.pairs) }}
-    timeout-minutes: 30
+    timeout-minutes: 60
     container:
       image: mcr.microsoft.com/playwright:v1.59.1-jammy
     services:
@@ -100,19 +100,19 @@ jobs:
           --health-timeout=5s
           --health-retries=10
     steps:
-      - name: Extract category and retailer
-        id: extract
-        shell: bash
-        run: |
-          echo "retailer=$(echo '${{ matrix.pair }}' | cut -d: -f1)" >> "$GITHUB_OUTPUT"
-          echo "category=$(echo '${{ matrix.pair }}' | cut -d: -f2)" >> "$GITHUB_OUTPUT"
-
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           repository: ${{ secrets.MAIN_REPO }}
           token: ${{ secrets.MY_PAT }}
           path: project
+
+      - name: Extract category and retailer
+        id: extract
+        shell: bash
+        run: |
+          echo "retailer=$(echo '${{ matrix.pair }}' | cut -d: -f1)" >> "$GITHUB_OUTPUT"
+          echo "category=$(echo '${{ matrix.pair }}' | cut -d: -f2)" >> "$GITHUB_OUTPUT"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
