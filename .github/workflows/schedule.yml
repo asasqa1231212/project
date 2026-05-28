@@ -18,10 +18,10 @@ env:
   NODE_VERSION: "22"
 
 jobs:
-  get-categories:
+  get-pairs:
     runs-on: ubuntu-latest
     outputs:
-      categories: ${{ steps.get.outputs.categories }}
+      pairs: ${{ steps.get.outputs.pairs }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -52,33 +52,34 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: pnpm exec prisma generate
 
-      - name: Get categories
+      - name: Get retailer-category pairs
         id: get
         working-directory: project
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         shell: bash
         run: |
-          categories=$(pnpm exec tsx scripts/get-categories-from-db.ts 2>/dev/null)
-          echo "Raw categories:"
-          echo "$categories"
-          if [ -z "$categories" ] || [ "$categories" = "null" ]; then
-            categories="[]"
+          pairs=$(pnpm exec tsx scripts/get-retailer-category-pairs.ts 2>/dev/null)
+          echo "Raw pairs:"
+          echo "$pairs"
+          if [ -z "$pairs" ] || [ "$pairs" = "null" ]; then
+            pairs="[]"
           fi
           delimiter=$(dd if=/dev/urandom bs=1 count=16 2>/dev/null | od -An -tx1 | tr -d ' \n')
-          echo "categories<<$delimiter" >> "$GITHUB_OUTPUT"
-          echo "$categories" >> "$GITHUB_OUTPUT"
+          echo "pairs<<$delimiter" >> "$GITHUB_OUTPUT"
+          echo "$pairs" >> "$GITHUB_OUTPUT"
           echo "$delimiter" >> "$GITHUB_OUTPUT"
 
   run:
-    needs: get-categories
-    if: ${{ needs.get-categories.outputs.categories != '[]' }}
+    needs: get-pairs
+    if: ${{ needs.get-pairs.outputs.pairs != '[]' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 20
       matrix:
-        category: ${{ fromJson(needs.get-categories.outputs.categories) }}
+        pair: ${{ fromJson(needs.get-pairs.outputs.pairs) }}
+    timeout-minutes: 30
     container:
       image: mcr.microsoft.com/playwright:v1.59.1-jammy
     services:
@@ -92,6 +93,13 @@ jobs:
           --health-timeout=5s
           --health-retries=10
     steps:
+      - name: Extract category and retailer
+        id: extract
+        shell: bash
+        run: |
+          echo "retailer=$(echo '${{ matrix.pair }}' | cut -d: -f1)" >> "$GITHUB_OUTPUT"
+          echo "category=$(echo '${{ matrix.pair }}' | cut -d: -f2)" >> "$GITHUB_OUTPUT"
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
@@ -128,21 +136,24 @@ jobs:
       - name: Wait for FlareSolverr
         shell: bash
         run: |
-          for i in $(seq 1 15); do
+          for i in $(seq 1 30); do
             if curl -sf http://flaresolverr:8191/health > /dev/null 2>&1; then
               echo "FlareSolverr ready"
-              break
+              exit 0
             fi
-            echo "Waiting for FlareSolverr... ($i/15)"
+            echo "Waiting for FlareSolverr... ($i/30)"
             sleep 3
           done
+          echo "FlareSolverr failed to start"
+          exit 1
 
       - name: Run scraper
         id: scrape
         working-directory: project
         env:
           ENABLE_SCRAPING: "true"
-          CATEGORY: ${{ matrix.category }}
+          CATEGORY: ${{ steps.extract.outputs.category }}
+          RETAILER: ${{ steps.extract.outputs.retailer }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           NODE_ENV: production
           CF_BACKEND: flaresolverr
@@ -151,13 +162,13 @@ jobs:
           CRON_KEY: ${{ secrets.CRON_KEY }}
           APP_URL: ${{ secrets.APP_URL }}
         continue-on-error: true
-        run: pnpm -s scrape:update-prices --report --max-failure-rate 50 2>&1 | tee scrape-output.log
+        run: stdbuf -oL pnpm -s scrape:update-prices --category "$CATEGORY" --retailer "$RETAILER" --report --max-failure-rate 50 2>&1 | tee scrape-output.log
 
       - name: Upload artifacts on failure
         if: steps.scrape.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
-          name: scrape-report-${{ matrix.category }}-${{ github.run_id }}
+          name: scrape-report-${{ steps.extract.outputs.retailer }}-${{ steps.extract.outputs.category }}-${{ github.run_id }}
           path: |
             reports/
             scrape-output.log
@@ -169,7 +180,7 @@ jobs:
 
   notify:
     needs:
-      - get-categories
+      - get-pairs
       - run
     if: always()
     runs-on: ubuntu-latest
@@ -181,11 +192,11 @@ jobs:
           RUN_RESULT="${{ needs.run.result }}"
           if [ "$RUN_RESULT" = "success" ]; then
             STATUS_EMOJI="✅"
-            STATUS_TEXT="All categories processed"
+            STATUS_TEXT="All retailer-category pairs processed"
             COLOR=5763719
           elif [ "$RUN_RESULT" = "skipped" ]; then
             STATUS_EMOJI="⏭️"
-            STATUS_TEXT="Skipped (no categories)"
+            STATUS_TEXT="Skipped (no pairs)"
             COLOR=16763904
           elif [ "$RUN_RESULT" = "cancelled" ]; then
             STATUS_EMOJI="❌"
@@ -193,22 +204,22 @@ jobs:
             COLOR=15548997
           else
             STATUS_EMOJI="⚠️"
-            STATUS_TEXT="Some categories failed"
+            STATUS_TEXT="Some pairs failed"
             COLOR=16744480
           fi
-          CATEGORIES_RAW='${{ needs.get-categories.outputs.categories }}'
-          CATEGORY_COUNT=$(echo "$CATEGORIES_RAW" | jq '. | length' 2>/dev/null || echo "0")
+          PAIRS_RAW='${{ needs.get-pairs.outputs.pairs }}'
+          PAIR_COUNT=$(echo "$PAIRS_RAW" | jq '. | length' 2>/dev/null || echo "0")
           echo "status_emoji=$STATUS_EMOJI" >> "$GITHUB_OUTPUT"
           echo "status_text=$STATUS_TEXT" >> "$GITHUB_OUTPUT"
           echo "color=$COLOR" >> "$GITHUB_OUTPUT"
-          echo "category_count=$CATEGORY_COUNT" >> "$GITHUB_OUTPUT"
+          echo "pair_count=$PAIR_COUNT" >> "$GITHUB_OUTPUT"
 
       - name: Send notification
         env:
           STATUS_EMOJI: ${{ steps.collect.outputs.status_emoji }}
           STATUS_TEXT: ${{ steps.collect.outputs.status_text }}
           COLOR: ${{ steps.collect.outputs.color }}
-          CATEGORY_COUNT: ${{ steps.collect.outputs.category_count }}
+          PAIR_COUNT: ${{ steps.collect.outputs.pair_count }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           RUN_ID: ${{ github.run_id }}
           RUN_NUMBER: ${{ github.run_number }}
@@ -221,7 +232,7 @@ jobs:
             --arg emoji "$STATUS_EMOJI" \
             --arg status "$STATUS_TEXT" \
             --argjson color "$COLOR" \
-            --arg count "$CATEGORY_COUNT" \
+            --arg count "$PAIR_COUNT" \
             --arg url "$RUN_URL" \
             --arg run_id "$RUN_ID" \
             --arg run_number "$RUN_NUMBER" \
@@ -234,7 +245,7 @@ jobs:
                 color: $color,
                 fields: [
                   { name: "Status", value: $status, inline: false },
-                  { name: "Categories", value: $count, inline: true },
+                  { name: "Pairs processed", value: $count, inline: true },
                   { name: "Run", value: ("#" + $run_number + " (ID: " + $run_id + ")"), inline: true },
                   { name: "Repository", value: $repo, inline: true },
                   { name: "Triggered by", value: $actor, inline: true },
