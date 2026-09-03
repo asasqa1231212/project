@@ -2,7 +2,7 @@ name: products-scraping
 
 on:
   schedule:
-    - cron: "0 * * * *"
+    - cron: "0 6,18 * * *"
   workflow_dispatch:
 
 permissions:
@@ -57,6 +57,7 @@ jobs:
         id: get
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          EXCLUDE_RETAILERS: "auto"
         shell: bash
         run: |
           echo "Current dir: $(pwd)"
@@ -83,7 +84,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      max-parallel: 20
+      max-parallel: 5
       matrix:
         pair: ${{ fromJson(needs.get-pairs.outputs.pairs) }}
     timeout-minutes: 60
@@ -189,6 +190,7 @@ jobs:
           TWO_CAPTCHA_KEY: ${{ secrets.TWO_CAPTCHA_KEY }}
           CRON_KEY: ${{ secrets.CRON_KEY }}
           APP_URL: ${{ secrets.APP_URL }}
+          EXCLUDE_RETAILERS: "auto"
         continue-on-error: true
         run: stdbuf -oL pnpm -s scrape:update-prices --category "$CATEGORY" --retailer "$RETAILER" --report --max-failure-rate 50 2>&1 | tee scrape-output.log
 
@@ -272,7 +274,7 @@ jobs:
                 title: ($emoji + " Price Update " + (if $emoji == "✅" then "Succeeded" elif $emoji == "⚠️" then "Partial" else "Failed" end)),
                 color: $color,
                 fields: [
-                  { name: "Status", value: $status, inline: false },
+                  { name: "Status", value: $status, inline: true },
                   { name: "Pairs processed", value: $count, inline: true },
                   { name: "Run", value: ("#" + $run_number + " (ID: " + $run_id + ")"), inline: true },
                   { name: "Repository", value: $repo, inline: true },
